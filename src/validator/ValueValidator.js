@@ -296,6 +296,16 @@ class ValueValidator {
       maxArrayLength: 1000000,
     });
 
+
+    /**
+     * Objeto de metadados para rastreamento de informações sobre o valor sendo validado
+     * @type {Object} 
+     * @property {string} originalType - Tipo original do valor antes da validação
+     * @property {boolean} hasComplexTypes - Indica se o valor contém tipos complexos
+     * @property {number} estimatedSize - Tamanho estimado do valor em bytes
+     * @property {number} depth - Profundidade de aninhamento do valor
+     * @property {Array} complexTypes - Lista de tipos complexos encontrados no valor
+     */
     const metadata = {
       originalType: typeof value,
       hasComplexTypes: false,
@@ -432,10 +442,23 @@ class ValueValidator {
    */
   _analyzeValueDepth(value, maxDepth) {
     /**
+     * Enumeração de tipos complexos usados na análise de profundidade de valores
+     * @readonly
+     * @enum {string}
+     * @description Define constantes para identificação de tipos complexos como Date, Map e Set
+     */
+    const enumTipes = Object.freeze({
+      DATE: 'Date',
+      MAP: 'Map',
+      SET: 'Set',
+    })
+    
+    /**
      * Objeto de análise para rastrear informações de profundidade e tipos complexos durante a validação de valor
+     * @type {Object} 
      * @property {number} maxDepth - Profundidade máxima alcançada durante a análise
      * @property {boolean} hasComplexTypes - Indica se tipos complexos foram encontrados
-     * @property {array<string>} complexTypes - Lista de tipos complexos detectados (como Date, Map, Set)
+     * @property {Array<string>} complexTypes - Lista de tipos complexos detectados (como Date, Map, Set)
      */
     const analysis = {
       maxDepth: 0,
@@ -464,13 +487,13 @@ class ValueValidator {
       // Identifica tipos complexos
       if (val instanceof Date) {
         analysis.hasComplexTypes = true;
-        if (!analysis.complexTypes.includes('Date')) {
-          analysis.complexTypes.push('Date');
+        if (!analysis.complexTypes.includes(enumTipes.DATE)) {
+          analysis.complexTypes.push(enumTipes.DATE);
         }
       } else if (val instanceof Map) {
         analysis.hasComplexTypes = true;
-        if (!analysis.complexTypes.includes('Map')) {
-          analysis.complexTypes.push('Map');
+        if (!analysis.complexTypes.includes(enumTipes.MAP)) {
+          analysis.complexTypes.push(enumTipes.MAP);
         }
         for (const [key, value] of val) {
           analyzeRecursive(key, currentDepth + 1);
@@ -478,8 +501,8 @@ class ValueValidator {
         }
       } else if (val instanceof Set) {
         analysis.hasComplexTypes = true;
-        if (!analysis.complexTypes.includes('Set')) {
-          analysis.complexTypes.push('Set');
+        if (!analysis.complexTypes.includes(enumTipes.SET)) {
+          analysis.complexTypes.push(enumTipes.SET);
         }
         for (const item of val) {
           analyzeRecursive(item, currentDepth + 1);
