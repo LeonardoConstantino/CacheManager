@@ -507,7 +507,7 @@ class CacheManagerTester {
         'noExpirationCache',
         {
           defaultTTL: 3600, // TTL padrão de 1 hora
-          enableLRU: true, // Ativar LRU (Least Recently Used)
+          enableLRU: false, // Ativar LRU (Least Recently Used)
           enableAutoCleanup: false, // Ativar limpeza automática
           enableWeakOptimization: true, // Ativar otimização com WeakMap()
           maxSize: 100, // Tamanho máximo do cache
