@@ -1,0 +1,16 @@
+{
+  "name": "cachemanager",
+  "version": "1.0.0",
+  "description": "Uma biblioteca JavaScript avançada para gerenciamento de cache em memória e persistente, com suporte para TTL (Time To Live), LRU (Least Recently Used) e múltiplas estratégias de persistência.",
+  "main": "./index.js",
+  "directories": {
+    "example": "./examples/basic-demo.js"
+  },
+  "scripts": {
+    "test": "node ./tests/cache.test.js",
+    "demo": "node ./examples/basic-demo.js"
+  },
+  "keywords": ["cache", "cachemanager", "ttl", "lru", "memory", "persistent", "nodejs", "javascript", "gerenciamento"],
+  "author": "Leonardo H. Constantino",
+  "license": "ISC"
+}
