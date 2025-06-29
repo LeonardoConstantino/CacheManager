@@ -18,7 +18,7 @@ Uma biblioteca JavaScript avançada para gerenciamento de cache em memória e pe
 
 1. Clone o repositório
 ```bash
-git clone https://github.com/seu-usuario/CacheManager.git
+git clone https://github.com/LeonardoConstantino/CacheManager.git
 ```
 2. Para usar em seu projeto
 ```bash
