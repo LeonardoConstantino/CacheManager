@@ -26,6 +26,8 @@ class PersistentCache {
   /** @type {NodeJS.Timeout | null} */
   #saveInterval;
 
+  _taskId;
+
   /**
    * @private
    * @type {object}
@@ -47,6 +49,7 @@ class PersistentCache {
     this.#persistence = new MinimalPersistence(storageKey);
     this.#autoSave = autoSaveInterval !== null;
     this.#saveInterval = null;
+    this._taskId = `saveCache-${storageKey}`
 
     // Carrega dados existentes na inicialização
     this.load();
@@ -58,7 +61,7 @@ class PersistentCache {
       //   this.save();
       // }, autoSaveInterval);
       globalQueue.addTask(
-        `saveCache-${storageKey}`,
+        this._taskId,
         () => {
           this.save();
         },
@@ -80,6 +83,10 @@ class PersistentCache {
         entries: this._serializeCacheEntries(),
         stats: this.#cache.getStats(),
       };
+
+      if(ignoreDebounce){
+        globalQueue.executeNow(this._taskId)
+      }
 
       return this.#persistence.save(cacheData, ignoreDebounce);
     } catch (error) {
