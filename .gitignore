@@ -1,0 +1,21 @@
+# Arquivos de sistema
+.DS_Store
+Thumbs.db
+
+# Módulos e dependências
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+
+# Arquivos de build
+dist/
+build/
+*.bundle.js
+*.bundle.js.map
+
+# Outros arquivos
+.cache/
+.vscode/
+*.log
+.generated/
