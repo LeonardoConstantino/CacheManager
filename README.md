@@ -16,13 +16,30 @@ Uma biblioteca JavaScript avançada para gerenciamento de cache em memória e pe
 
 ## 📦 Instalação
 
-1. Clone o repositório
+Para instalar e rodar o projeto localmente, siga os passos abaixo:
+
+1. Clone o repositório:
+
 ```bash
 git clone https://github.com/LeonardoConstantino/CacheManager.git
 ```
-2. Para usar em seu projeto
+
+2. Navegue até o diretório do projeto:
+
 ```bash
-npm install ./CacheManager
+cd CacheManager
+```
+
+3. Rode a demonstração:
+
+```bash
+npm run demo
+```
+
+4. Rode os teste:
+
+```bash
+npm run test
 ```
 ## Tecnologias Utilizadas
 - **JavaScript** para lógica.
