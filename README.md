@@ -631,11 +631,11 @@ const silentCache = getGlobalCacheManager({ report: false });
 | Método                                             | Descrição                                   | retorno                  |
 | -------------------------------------------------- | ------------------------------------------- | ------------------------ |
 | `createCache(name, options \| Preset, overrides?)` | Cria um novo cache                          | `Cache`                  |
-| `removeCache(name)`                                | Remove um cache                             | `void`                   |
+| `removeCache(name)`                                | Remove um cache                             | `boolean`                   |
 | `getCache(name)`                                   | Retorna um cache                            | `Cache \| null`          |
 | `listCaches()`                                     | Lista todos os caches                       | `string[]`               |
 | `getStats()`                                       | Retorna estatísticas globais                | `CacheStats`             |
-| `cleanupAll()`                                     | Limpa todos os caches                       | `void`                   |
+| `cleanupAll()`                                     | Limpa todos os caches                       | `number`                   |
 | `setCleanupFrequency()`                            | Define a frequência de limpeza              | `void`                   |
 | `startAutoCleanup()`                               | Inicia a limpeza automática                 | `void`                   |
 | `stopAutoCleanup()`                                | Para a limpeza automática                   | `void`                   |

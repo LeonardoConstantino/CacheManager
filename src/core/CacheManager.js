@@ -183,11 +183,14 @@ class CacheManager {
    * Se o cache for encontrado, ele é destruído (limpando seus recursos internos) e removido do gerenciador.
    * Se todos os caches forem removidos, a limpeza automática é interrompida.
    * @param {string} name - O nome do cache a ser removido.
-   * @returns {void}
+   * @returns {boolean} `true` se o cache foi removido com sucesso, `false` caso contrário.
    */
   removeCache(name) {
     this._logger.info(`Removendo cache "${name}"`);
     const cache = this._caches.get(name);
+
+    if (!cache) return false;
+
     if (cache) {
       cache.destroy();
       this._caches.delete(name);
@@ -197,6 +200,8 @@ class CacheManager {
     if (this._caches.size === 0) {
       this.stopAutoCleanup();
     }
+
+    return true;
   }
 
   /**
@@ -242,7 +247,7 @@ class CacheManager {
   /**
    * Limpa itens expirados de todos os caches gerenciados.
    * Cada cache deve implementar um método `cleanup()`.
-   * @returns {void}
+   * @returns {number} Retorna o numero de caches limpos
    */
   cleanupAll() {
     let cont = 0;
@@ -253,20 +258,24 @@ class CacheManager {
       }
     }
 
-    if(cont > 0){
+    if (cont > 0) {
       this._logger.info(`${cont}/${this._caches.size} caches limpos.`);
     }
 
-    const logStatus = this._logger.getBufferStatus()
+    const logStatus = this._logger.getBufferStatus();
 
     if (logStatus.percentageFull > 90) {
-      this._logger.info(`${logStatus.cont}/${logStatus.maxSize} logs para descartes.`);
+      this._logger.info(
+        `${logStatus.cont}/${logStatus.maxSize} logs para descartes.`
+      );
 
       const logs = this._logger.discardLogs();
 
       this._logger.info(`${logs.length} logs descartados.`);
       this._logger.debug(logs);
     }
+
+    return cont
   }
 
   /**
@@ -287,8 +296,8 @@ class CacheManager {
     this._cleanupFrequency = frequency;
 
     // if (this._cleanupInterval) {
-      this.stopAutoCleanup();
-      this.startAutoCleanup();
+    this.stopAutoCleanup();
+    this.startAutoCleanup();
     // }
   }
 
