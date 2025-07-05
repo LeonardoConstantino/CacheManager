@@ -239,6 +239,7 @@ const cache = cacheManager.createCache('advanced_ttl', 'balanced');
 cache.set('short_lived', 'dados temporários', 60000); // 1 minuto
 cache.set('medium_lived', 'dados normais', 1800000); // 30 minutos
 cache.set('long_lived', 'dados duradouros', 86400000); // 24 horas
+cache.set('permanent', 'dados permanentes', Infinity); // Sem expiração
 
 // Verificar TTL restante
 const remainingTTL = cache.getTTL('medium_lived');
@@ -246,6 +247,8 @@ console.log(`Expira em: ${remainingTTL}ms`);
 
 // Atualizar TTL de item existente
 cache.updateTTL('short_lived', 300000); // Extende para 5 minutos
+// Torna permanente
+cache.updateTTL('short_lived', Infinity);
 ```
 
 ### Monitoramento e Estatísticas

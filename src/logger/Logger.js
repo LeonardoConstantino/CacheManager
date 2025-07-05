@@ -315,18 +315,19 @@ class Logger {
    *
    * @param {string} name - Nome identificador para o timer.
    * @param {LogLevelValue} [level=logLevel.INFO] - Nível de log para o timer (padrão: INFO).
+   * @param { boolean } [hideLogs=false] - Indica se os logs devem ser ocultados (padrão: false).
    * @returns {Timer} Instância de Timer para medição de tempo.
    * @description Cria um novo timer para monitoramento de desempenho, respeitando o estado atual do logger.
    * Se o logger estiver destruído, retorna um timer dummy.
    */
-  Timer(name, level = logLevel.INFO) {
+  Timer(name, level = logLevel.INFO, hideLogs) {
     if (this._state === LoggerState.DESTROYED) {
       console.warn('Chamada ignorada: Timer() em logger destruído');
       return new this._TimerClass('dummy-destroyed');
     }
 
     const validLevel = toLogLevelValue(level) ? logLevel.INFO : level;
-    return new this._TimerClass(name, validLevel);
+    return new this._TimerClass(name, validLevel, hideLogs);
   }
 
   /**

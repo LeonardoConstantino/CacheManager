@@ -168,22 +168,34 @@ class TaskQueue {
    * @param {string} id - ID da tarefa a ser removida do heap
    */
   removeFromHeap(id) {
-    // Array temporário para itens que devem permanecer
-    const remainingItems = [];
+  const remainingItems = [];
+  let removedCount = 0;
 
-    // Extrai todos os itens, filtrando o que deve ser removido
-    while (this.executionHeap.size() > 0) {
-      const item = this.executionHeap.pop();
-      if (item?.key !== id) {
-        remainingItems.push(item);
-      }
+  // Extrai todos os itens, filtrando o que deve ser removido
+  while (this.executionHeap.size() > 0) {
+    const item = this.executionHeap.pop();
+    
+    if (!item) {
+      continue;
     }
-
-    // Reconstrói o heap inserindo apenas os itens não-nulos
-    remainingItems
-      .filter((item) => item !== null)
-      .forEach((item) => this.executionHeap.push(item));
+    
+    if (item.key === id) {
+      removedCount++;
+    } else {
+      remainingItems.push(item);
+    }
   }
+
+  // CORREÇÃO: Reconstrói heap apenas com itens válidos
+  remainingItems
+    .filter((item) => item && this.tasks.has(item.key))
+    .forEach((item) => this.executionHeap.push(item));
+
+  // Log se múltiplos itens foram removidos (indica problema)
+  if (removedCount > 1) {
+    this.logger.warn(`Múltiplos itens removidos do heap para tarefa '${id}': ${removedCount}`);
+  }
+}
 
   /**
    * OTIMIZAÇÃO: Inicia processamento com timer dinâmico baseado na próxima execução
@@ -344,6 +356,7 @@ class TaskQueue {
 
     // Limpeza automática de tarefas inativas
     this._cleanupInactiveTasks();
+    this._cleanupOrphanedHeapItems();
   }
 
   /**
@@ -353,64 +366,75 @@ class TaskQueue {
    * @returns {ScheduledTask[]} Array de tarefas prontas para execução
    */
   _getReadyTasksFromHeap() {
-    // Array para tarefas prontas encontradas
-    const readyTasks = [];
+  const readyTasks = [];
+  const currentTime = Date.now();
+  const tempItems = [];
 
-    // Timestamp atual para comparações
-    const currentTime = Date.now();
+  // CORREÇÃO: Limita processamento para evitar loops infinitos
+  let processedCount = 0;
+  const maxProcessItems = Math.min(this.executionHeap.size(), 1000);
 
-    // Array temporário para itens que precisam ser reinseridos
-    const tempItems = [];
-
-    // Processa itens do heap até encontrar um não-pronto
-    while (this.executionHeap.size() > 0) {
-      // Peek no próximo item sem remover
-      const item = this.executionHeap.peek();
-
-      if (!item) {
-        break;
-      }
-
-      // Se item não está pronto, para a busca (heap está ordenado)
-      if (item.expiresAt > currentTime) {
-        break;
-      }
-
-      // Remove item do heap para processamento
-      const heapItem = this.executionHeap.pop();
-
-      if (!heapItem) {
-        break;
-      }
-
-      // Busca tarefa correspondente no mapa
-      const task = this.tasks.get(heapItem.key);
-
-      // Verifica se tarefa ainda existe e está ativa
-      if (task && task.isActive) {
-        // Verifica se deve executar (inclui debounce)
-        if (task.shouldExecute()) {
-          readyTasks.push(task);
-        } else {
-          // Tarefa bloqueada por debounce - incrementa estatística
-          this.stats.totalSkippedByDebounce++;
-          this.logger.debug(
-            `Tarefa '${task.id}' pulada por debounce`
-          );
-        }
-
-        // Re-agenda tarefa ativa no heap para próxima execução
-        if (task.isActive) {
-          tempItems.push(task.toHeapItem());
-        }
-      }
+  while (this.executionHeap.size() > 0 && processedCount < maxProcessItems) {
+    const item = this.executionHeap.peek();
+    
+    if (!item) {
+      // CORREÇÃO: Remove item nulo/inválido
+      this.executionHeap.pop();
+      processedCount++;
+      continue;
     }
 
-    // Reinsere itens reagendados no heap para manter estrutura
-    tempItems.forEach((item) => this.executionHeap.push(item));
+    // Se item não está pronto, para a busca (heap está ordenado)
+    if (item.expiresAt > currentTime) {
+      break;
+    }
 
-    return readyTasks;
+    // Remove item do heap
+    const heapItem = this.executionHeap.pop();
+    processedCount++;
+
+    if (!heapItem) continue;
+
+    // CORREÇÃO: Verifica se tarefa ainda existe antes de processar
+    const task = this.tasks.get(heapItem.key);
+    
+    if (!task) {
+      // CORREÇÃO: Item órfão detectado - não reinsere no heap
+      this.logger.debug(`Item órfão removido do heap: ${heapItem.key}`);
+      continue;
+    }
+
+    // CORREÇÃO: Verifica se tarefa está realmente ativa
+    if (!task.isActive) {
+      // CORREÇÃO: Tarefa inativa - não reinsere no heap
+      this.logger.debug(`Tarefa inativa removida do heap: ${task.id}`);
+      continue;
+    }
+
+    // Verifica se deve executar (inclui debounce)
+    if (task.shouldExecute()) {
+      readyTasks.push(task);
+    } else {
+      // Tarefa bloqueada por debounce
+      this.stats.totalSkippedByDebounce++;
+      this.logger.debug(`Tarefa '${task.id}' pulada por debounce`);
+    }
+
+    // CORREÇÃO: Re-agenda apenas se tarefa ainda está ativa
+    if (task.isActive) {
+      tempItems.push(task.toHeapItem());
+    }
   }
+
+  // Reinsere apenas itens válidos no heap
+  tempItems.forEach((item) => {
+    if (item && this.tasks.has(item.key)) {
+      this.executionHeap.push(item);
+    }
+  });
+
+  return readyTasks;
+}
 
   /**
    * Executa tarefa individual e atualiza heap automaticamente
@@ -709,6 +733,51 @@ class TaskQueue {
     this.logger = null;
     this._destroyed = true;
   }
+
+  /**
+ * CORREÇÃO: Limpa itens órfãos do heap que não correspondem a tarefas ativas
+ * Previne vazamento de memória no heap
+ * @private
+ */
+_cleanupOrphanedHeapItems() {
+  // Executa limpeza apenas periodicamente para não impactar performance
+  if (this.stats.totalExecutions % 100 !== 0) {
+    return;
+  }
+
+  const validItems = [];
+  const currentTime = Date.now();
+  let orphanedCount = 0;
+
+  // Processa todos os itens do heap
+  while (this.executionHeap.size() > 0) {
+    const item = this.executionHeap.pop();
+    
+    if (!item) {
+      orphanedCount++;
+      continue;
+    }
+
+    // Verifica se item corresponde a uma tarefa ativa
+    const task = this.tasks.get(item.key);
+    
+    if (task && task.isActive) {
+      // Item válido - mantém no heap
+      validItems.push(item);
+    } else {
+      // Item órfão - descarta
+      orphanedCount++;
+    }
+  }
+
+  // Reconstrói heap apenas com itens válidos
+  validItems.forEach((item) => this.executionHeap.push(item));
+
+  // Log da limpeza se itens foram removidos
+  if (orphanedCount > 0) {
+    this.logger.debug(`Limpeza do heap: ${orphanedCount} itens órfãos removidos`);
+  }
+}
 }
 
 module.exports = TaskQueue;

@@ -3,13 +3,14 @@
  * @typedef {import('../types/cache.types.js').MyCacheMemoryStats} MyCacheMemoryStats
  */
 
-const {MinimalPersistence} = require('./MinimalPersistence.js');
+const { MinimalPersistence } = require('./MinimalPersistence.js');
 const Logger = require('../logger/Logger.js');
 const { logStyles } = require('../utils/log.js');
 const { getGlobalTaskQueue } = require('../taskQueue/index.js');
 const globalQueue = getGlobalTaskQueue({
   logger: new Logger(logStyles.magenta('[OptimizedQueue]')),
 });
+const INFINITY_TOKEN = '__Infinity__';
 
 /**
  * @class PersistentCache
@@ -49,7 +50,7 @@ class PersistentCache {
     this.#persistence = new MinimalPersistence(storageKey);
     this.#autoSave = autoSaveInterval !== null;
     this.#saveInterval = null;
-    this._taskId = `saveCache-${storageKey}`
+    this._taskId = `saveCache-${storageKey}`;
 
     // Carrega dados existentes na inicialização
     this.load();
@@ -84,8 +85,8 @@ class PersistentCache {
         stats: this.#cache.getStats(),
       };
 
-      if(ignoreDebounce){
-        globalQueue.executeNow(this._taskId)
+      if (ignoreDebounce) {
+        globalQueue.executeNow(this._taskId);
       }
 
       return this.#persistence.save(cacheData, ignoreDebounce);
@@ -113,10 +114,14 @@ class PersistentCache {
       let restoredCount = 0;
 
       for (const [key, item] of Object.entries(data.entries)) {
-        if (now <= item.expiresAt) {
-          // Calcula TTL restante
-          const remainingTTL = item.expiresAt - now;
-          this.#cache.set(key, item.value, remainingTTL);
+        // Converter string "Infinity" para valor numérico
+        const expiresAt =
+          item.expiresAt === INFINITY_TOKEN ? Infinity : item.expiresAt;
+
+        if (expiresAt === Infinity || now <= expiresAt) {
+          const ttl = expiresAt === Infinity ? Infinity : expiresAt - now;
+
+          this.#cache.set(key, item.value, ttl);
           restoredCount++;
         }
       }
@@ -158,7 +163,7 @@ class PersistentCache {
    * @param {number|null} [ttl=null] - O tempo de vida (Time-To-Live) do item em milissegundos.
    * @returns {boolean} O resultado da operação `set` do cache base.
    */
-  set(key, value, ttl=null) {
+  set(key, value, ttl = null) {
     // Armazena o resultado da operação set do cache
     const result = this.#cache.set(key, value, ttl);
     // Salva imediatamente em operações críticas se não há auto-save
@@ -285,8 +290,8 @@ class PersistentCache {
       globalQueue.removeTask('saveCache');
       this.#saveInterval = null;
     }
-    
-    this.clear()
+
+    this.clear();
   }
 
   /**
@@ -323,7 +328,11 @@ class PersistentCache {
         if (cacheEntry) {
           entries[key] = {
             value: item,
-            expiresAt: cacheEntry.expiresAt,
+            // Representação segura para JSON
+            expiresAt:
+              cacheEntry.expiresAt === Infinity
+                ? INFINITY_TOKEN
+                : cacheEntry.expiresAt,
             createdAt: cacheEntry.createdAt || Date.now(),
           };
         }

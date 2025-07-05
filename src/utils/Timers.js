@@ -20,7 +20,7 @@ const { formatDuration } = require('./utils.js');
  * @param {LogLevelValue} [level=logLevel.INFO] - Nível de log (DEBUG, INFO, WARN, ERROR)
  * @param {...any} args - Argumentos para passar à função
  * @returns {Promise<any>} Promise que resolve com o resultado da função
- * 
+ *
  * @example
  * // Exemplo síncrono
  * const result = await logTimer(
@@ -28,7 +28,7 @@ const { formatDuration } = require('./utils.js');
  *   'calcularRaizQuadrada',
  *   logLevel.DEBUG
  * );
- * 
+ *
  * @example
  * // Exemplo assíncrono
  * const data = await logTimer(
@@ -81,7 +81,7 @@ const logTimer = async (fn, functionName, level = logLevel.INFO, ...args) => {
  * @param {string} [functionName] - Nome amigável para logs
  * @param {LogLevelValue} [level=logLevel.INFO] - Nível de log
  * @returns {Function} Função decorada com medição de tempo
- * 
+ *
  * @example
  * // Decorando uma função existente
  * const fetchWithTimer = withTimer(
@@ -89,7 +89,7 @@ const logTimer = async (fn, functionName, level = logLevel.INFO, ...args) => {
  *   'fetchDataDecorated',
  *   logLevel.DEBUG
  * );
- * 
+ *
  * // Usando a função decorada
  * const result = await fetchWithTimer('param1', 'param2');
  */
@@ -104,7 +104,7 @@ const withTimer = (fn, functionName, level = logLevel.INFO) => {
 /**
  * Sistema de timer manual para medição granular com múltiplos checkpoints
  * @class Timer
- * 
+ *
  * @example
  * // Exemplo básico de uso
  * const timer = new Timer('ProcessamentoDados', logLevel.DEBUG);
@@ -121,29 +121,37 @@ class Timer {
    * @constructor
    * @param {string} name - Identificador único para o timer
    * @param {LogLevelValue} [level=logLevel.INFO] - Nível de log padrão
+   * @param { boolean } [hideLogs=false] - Indica se os logs devem ser ocultados
    */
-  constructor(name, level = logLevel.INFO) {
-    /** 
+  constructor(name, level = logLevel.INFO, hideLogs = false) {
+    /**
      * Nome identificador do timer
      * @type {string}
      * @public
      */
     this.name = name;
-    
+
     /**
      * Nível de log para operações
      * @type {LogLevelValue}
      * @public
      */
     this.level = level;
-    
+
+    /**
+     * Indica se os logs do timer devem ser ocultados
+     * @type {boolean}
+     * @private
+     */
+    this.hideLogs = hideLogs;
+
     /**
      * Timestamp de início
      * @type {?number}
      * @private
      */
     this.startTime = null;
-    
+
     /**
      * Registro de checkpoints
      * @type {Array<Object>}
@@ -156,7 +164,7 @@ class Timer {
    * Inicia a contagem de tempo
    * @method start
    * @returns {Timer} Instância atual para method chaining
-   * 
+   *
    * @example
    * timer.start()
    *   .checkpoint('fase1')
@@ -165,7 +173,9 @@ class Timer {
   start() {
     this.startTime = performance.now();
     this.checkpoints = [];
-    log(this.level, `⏱️ Timer iniciado: ${this.name}`);
+    if (!this.hideLogs) {
+      log(this.level, `⏱️ Timer iniciado: ${this.name}`);
+    }
     return this;
   }
 
@@ -197,10 +207,12 @@ class Timer {
 
     this.checkpoints.push(checkpoint);
 
-    log(this.level, `📍 ${this.name} - ${label}`, {
-      elapsed: formatDuration(elapsed),
-      stepTime: formatDuration(stepTime),
-    });
+    if (!this.hideLogs) {
+      log(this.level, `📍 ${this.name} - ${label}`, {
+        elapsed: formatDuration(elapsed),
+        stepTime: formatDuration(stepTime),
+      });
+    }
 
     return this;
   }
@@ -230,7 +242,9 @@ class Timer {
       checkpoints: this.checkpoints,
     };
 
-    log(this.level, `🏁 Timer finalizado: ${this.name}`, stats);
+    if (!this.hideLogs) {
+      log(this.level, `🏁 Timer finalizado: ${this.name}`, stats);
+    }
 
     // Reset para reutilização
     this.startTime = null;

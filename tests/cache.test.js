@@ -578,6 +578,9 @@ class CacheManagerTester {
           this.config.duration / 60000
         } minutos)`
       );
+      this.createdCaches
+        .get('noExpirationCache')
+        .set('noExpirationValue', '1 2 3 nao expirei!!!', Infinity);
 
       while (!stopRequested) {
         const now = Date.now();
@@ -625,9 +628,6 @@ class CacheManagerTester {
       const cacheIndex = Math.floor(Math.random() * this.cachesNames.length);
       const selectedCacheName = this.cachesNames[cacheIndex];
       const cache = this.createdCaches.get(selectedCacheName);
-      this.createdCaches
-        .get('noExpirationCache')
-        .set('noExpirationValue', '1 2 3 nao expirei!!!', null);
 
       if (!cache) {
         throw new Error(`Cache ${selectedCacheName} não encontrado`);

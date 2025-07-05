@@ -13,6 +13,7 @@
 const MinHeap = require('../expiration/TTLHeap.js');
 const { DoublyLinkedList, LRUNode } = require('../eviction/LRUPolicy.js');
 const Logger = require('../logger/Logger.js');
+const { logLevel } = require('../utils/log.js');
 
 /**
  * Objeto contendo as opções de congelamento disponíveis
@@ -111,6 +112,13 @@ class MyCache {
 
   /**
    * @private
+   * @type {Set<string>}
+   * @description Um conjunto que rastreia as chaves já utilizadas no cache, ajudando a prevenir duplicatas e gerenciar a reutilização de chaves.
+   */
+  _usedKeys;
+
+  /**
+   * @private
    * @type {MyCacheStats}
    * @description Objeto que armazena as estatísticas de desempenho do cache.
    */
@@ -157,6 +165,7 @@ class MyCache {
     this._objectMetadata = new WeakMap(); // Metadados de objetos
     this._cloneCache = new WeakMap(); // Cache de clones
     this._processedObjects = new WeakSet(); // Objetos processados
+    this._usedKeys = new Set(); // Chaves já utilizadas
     this._logger = new Logger('MyCache'); // Inicializa uma nova instancia de log.
     this._validateTTL(defaultTTL);
     this._logger.info('Inicializando...'); // Registra uma mensagem de log informando que o MyCache foi inicializado.
@@ -175,11 +184,22 @@ class MyCache {
       hits: 0,
       misses: 0,
       sets: 0,
-      evictions: 0,
+      evictions: 0, // Número de itens removidos por LRU
       cleanups: 0,
       hitRate: '0', // Taxa de acertos do cache
       objectsInCache: 0, // Número de objetos atualmente no cache
       clonesInCache: 0, // Número de clones de objetos no cache
+      missesExpired: 0, // Número de itens expirados
+      missesCold: 0, // Número de itens não encontrados
+      evictionsTTL: 0, // Número de itens removidos por TTL
+      totalSetLatencyMS: 0, // Soma de todas as Latências para armazenar itens
+      maxSetLatencyMS: {
+        // Latência máxima para armazenar um item
+        key: '', // Chave do item com a maior latência
+        latencyMS: 0, // Latência em milissegundos
+      },
+      avgSetLatencyMS: 0, // Latência média de armazenamento em milissegundos
+      lastSetKey: '', // Chave do último item armazenado
     };
   }
 
@@ -197,12 +217,15 @@ class MyCache {
    */
   set(key, value, ttl = null) {
     this._logger.debug(`Setando key: ${key} com value: ${value}`);
+    const timer = this._logger.Timer(key, logLevel.DEBUG, true);
+    timer.start();
 
     this._validateKey(key);
     this._validateTTL(ttl);
 
     const computedTTL = ttl || this._defaultTTL;
-    const expiresAt = Date.now() + computedTTL;
+    const expiresAt =
+      computedTTL === Infinity ? Infinity : Date.now() + computedTTL;
 
     // Remove item existente se houver
     if (this._entries.has(key)) {
@@ -221,7 +244,12 @@ class MyCache {
     });
 
     this._entries.set(key, item);
-    this._addToExpirationHeap(key, expiresAt);
+    this._usedKeys.add(key);
+    this._stats.lastSetKey = key;
+    // Adiciona ao heap SOMENTE se não for Infinity
+    if (expiresAt !== Infinity) {
+      this._addToExpirationHeap(key, expiresAt);
+    }
 
     // Verifica se o LRU está habilitado nas opções de configuração antes de adicionar
     if (this._options?.enableLRU === true) {
@@ -243,6 +271,15 @@ class MyCache {
     }
 
     this._stats.sets++;
+
+    const timerResult = timer.end();
+
+    this._stats.totalSetLatencyMS += timerResult.totalDuration;
+
+    if (timerResult.totalDuration > this._stats.maxSetLatencyMS.latencyMS) {
+      this._stats.maxSetLatencyMS.key = key;
+      this._stats.maxSetLatencyMS.latencyMS = timerResult.totalDuration;
+    }
   }
 
   /**
@@ -259,15 +296,20 @@ class MyCache {
 
     this._validateKey(key);
 
-    const item = this._entries.get(key);
+    // Verifica se nunca foi usada antes (é cold miss)
+    const isColdMiss = !this._usedKeys.has(key);
+    this._usedKeys.add(key); // marca como usada
 
+    const item = this._entries.get(key);
     if (!item) {
       this._stats.misses++;
+      if (isColdMiss) this._stats.missesCold++;
       return null;
     }
 
     if (this._checkItemExpiry(key, item)) {
       this._stats.misses++;
+      this._stats.missesExpired++;
       return null;
     }
 
@@ -432,6 +474,9 @@ class MyCache {
 
     const item = this._entries.get(key);
     if (!item) return null;
+    if (item.expiresAt === Infinity) {
+      return Infinity;
+    }
 
     return Math.max(0, item.expiresAt - Date.now());
   }
@@ -440,7 +485,7 @@ class MyCache {
    * Atualiza o TTL (Tempo de Vida) de um item existente no cache.
    * Se a chave não for encontrada ou o item já tiver expirado, a operação falha.
    * @param {string} key - A chave do item cujo TTL será atualizado.
-   * @param {number} ttl - O novo tempo de vida em milissegundos.
+   * @param {number} ttl - O novo tempo de vida em milissegundos, aceita números positivos, incluindo Infinity.
    * @returns {boolean} `true` se o TTL foi atualizado com sucesso; `false` caso contrário.
    * @throws {Error} Se a chave ou o TTL forem inválidos.
    */
@@ -455,14 +500,17 @@ class MyCache {
       return false;
     }
 
-    const newExpiresAt = Date.now() + ttl;
+    const newExpiresAt = ttl === Infinity ? Infinity : Date.now() + ttl;
     const updatedItem = {
       ...item,
       expiresAt: newExpiresAt,
     };
 
     this._entries.set(key, Object.freeze(updatedItem));
-    this._addToExpirationHeap(key, newExpiresAt);
+    // Adiciona ao heap SOMENTE se não for Infinity
+    if (newExpiresAt !== Infinity) {
+      this._addToExpirationHeap(key, newExpiresAt);
+    }
 
     return true;
   }
@@ -514,6 +562,8 @@ class MyCache {
       hitRate: `${hitRate}%`,
       ...remainingStats,
       ...objectCacheStats,
+      avgSetLatencyMS:
+        totalRequests > 0 ? this._stats.totalSetLatencyMS / totalRequests : 0,
     });
   }
 
@@ -588,18 +638,17 @@ class MyCache {
 
   /**
    * @private
-   * @description Valida se o TTL fornecido é um número positivo ou `null`.
-   * @param {number|null} ttl - O TTL a ser validado.
-   * @returns {void}
-   * @throws {Error} Se o TTL for inválido.
+   * @description Valida se o TTL fornecido é um número positivo, Infinity ou null.
    */
   _validateTTL(ttl) {
     this._logger.debug(`Validando TTL: ${ttl}`);
     if (
       ttl !== null &&
+      ttl !== Infinity && // Aceita Infinity
       (typeof ttl !== 'number' || ttl < 0 || !Number.isFinite(ttl))
     ) {
-      this._logger.error('TTL deve ser um número positivo ou null');
+      this._logger.error('TTL deve ser um número positivo, Infinity ou null');
+      throw new Error('TTL deve ser um número positivo, Infinity ou null');
     }
   }
 
@@ -612,9 +661,14 @@ class MyCache {
    */
   _checkItemExpiry(key, item) {
     this._logger.debug(`Checando itens inspirados para key: ${key}`);
+    // Itens com Infinity nunca expiram
+    if (item.expiresAt === Infinity) {
+      return false;
+    }
     if (Date.now() > item.expiresAt) {
       this._entries.delete(key);
       this._removeFromLRU(key);
+      this._stats.evictionsTTL++;
       return true;
     }
     return false;
@@ -691,6 +745,8 @@ class MyCache {
    */
   _addToExpirationHeap(key, expiresAt) {
     this._logger.debug(`Adicionando ao heap de inspiração: ${key}`);
+    // Ignora itens com TTL infinito
+    if (expiresAt === Infinity) return;
     this._expirationHeap.push({ key, expiresAt }); // Adiciona um novo HeapItem ao heap.
   }
 

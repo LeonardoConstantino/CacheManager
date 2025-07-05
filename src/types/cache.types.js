@@ -86,6 +86,15 @@
  * @property {number} cleanups - O número total de limpezas executadas.
  * @property {number} objectsInCache - O número de objetos complexos no cache.
  * @property {number} clonesInCache - O número de clones de objetos no cache de otimização.
+ * @property {number} missesExpired - Número de itens expirados
+ * @property {number} missesCold - Número de itens não encontrados
+ * @property {number} evictionsTTL - Número de itens removidos por TTL
+ * @property {number} totalSetLatencyMS - Soma de todas as Latências para armazenar itens
+ * @property {Object} maxSetLatencyMS - Objeto com a maior latência de armazenamento
+ * @property {string} maxSetLatencyMS.key - Chave do item com a maior latência
+ * @property {number} maxSetLatencyMS.latencyMS - Maior latência em milissegundos
+ * @property {number} avgSetLatencyMS - Latência média de armazenamento em milissegundos
+ * @property {string} lastSetKey - Chave do último item armazenado
  */
 
 /**

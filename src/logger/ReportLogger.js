@@ -6,6 +6,7 @@ const CacheManager = require('../core/CacheManager.js');
 const Logger = require('./Logger');
 const { createNewTaskQueue } = require('../taskQueue/index.js');
 const { logLevel, logStyles } = require('../utils/log.js');
+const { formatDuration } = require('./../utils/utils.js');
 /**
  * ReportLogger - Sistema de logging humanizado para estatísticas de sistema
  *
@@ -286,7 +287,12 @@ class ReportLogger {
     if (!this.isRunning) {
       return;
     }
-    if (!this.cacheManager || this.cacheManager.destroyed || !this.queue || this.queue?.destroyed) {
+    if (
+      !this.cacheManager ||
+      this.cacheManager.destroyed ||
+      !this.queue ||
+      this.queue?.destroyed
+    ) {
       this.logger.warn(
         'Gerenciadores não inicializados ou foram destruídos. Use start() primeiro.'
       );
@@ -365,11 +371,10 @@ class ReportLogger {
     try {
       const globalStats = this.cacheManager?.getStats();
 
-      // Garante que a estrutura de cacheStats esteja inicializada
       this.lastStatus.cacheStats ||= {};
       this.lastStatus.cacheStats.caches ||= {};
 
-      let output = [];
+      const output = [];
 
       output.push(this._getStyled('🗂️  ESTATÍSTICAS DE CACHE', 'bold'));
       output.push(
@@ -380,22 +385,29 @@ class ReportLogger {
       );
 
       for (const [_, stats] of Object.entries(globalStats.caches || {})) {
-        // Inicializa os valores anteriores se ainda não existirem
+        // Inicializa histórico se necessário
         this.lastStatus.cacheStats.caches[stats.name] ||= {
           usage: 0,
           hits: 0,
           misses: 0,
+          missesExpired: 0,
+          missesCold: 0,
           sets: 0,
+          evictions: 0,
+          evictionsTTL: 0,
           objectsInCache: 0,
           clonesInCache: 0,
+          avgSetLatencyMS: 0,
+          maxSetLatencyMS: { key: '', latencyMS: 0 },
         };
 
         const previous = this.lastStatus.cacheStats.caches[stats.name];
-        const efficiency = this._calculateCacheEfficiency(stats);
         const usage = this._calculateUsagePercentage(stats.size, stats.maxSize);
+        const efficiency = this._calculateCacheEfficiency(stats);
 
         output.push('');
         output.push(this._getStyled(`   📁 Cache: ${stats.name}`, 'yellow'));
+
         output.push(
           `      └─ Tamanho: ${stats.size}/${
             stats.maxSize
@@ -410,42 +422,71 @@ class ReportLogger {
           `      └─ Taxa de Acerto: ${stats.hitRate} (${efficiency})`
         );
 
+        output.push(`      └─ Operações:`);
         output.push(
-          `      └─ Operações:
-            └─ ${stats.hits} hits ${this._getTendency(
+          `         └─ ${stats.hits} hits ${this._getTendency(
             stats.hits,
             previous.hits
-          )}
-            └─ ${stats.misses} misses ${this._getTendency(
-            stats.misses,
-            previous.misses
-          )}
-            └─ ${stats.sets} sets ${this._getTendency(
-            stats.sets,
-            previous.sets
           )}`
         );
+        output.push(
+          `         └─ ${stats.misses} misses ${this._getTendency(
+            stats.misses,
+            previous.misses
+          )}`
+        );
+        output.push(
+          `         └─ ${stats.missesExpired} expirados ${this._getTendency(
+            stats.missesExpired,
+            previous.missesExpired
+          )}`
+        );
+        output.push(
+          `         └─ ${stats.missesCold} não encontrados ${this._getTendency(
+            stats.missesCold,
+            previous.missesCold
+          )}`
+        );
+        output.push(`         └─ ${stats.sets} sets`);
+        output.push(
+          `            └─ Latência média: ${formatDuration(stats.avgSetLatencyMS)}`
+        );
+        output.push(
+          `            └─ Máxima: ${stats.maxSetLatencyMS.key} (${formatDuration(stats.maxSetLatencyMS.latencyMS)})`
+        );
+        output.push(`            └─ Ultima set ${stats.lastSetKey}`);
+
         previous.hits = stats.hits;
         previous.misses = stats.misses;
+        previous.missesExpired = stats.missesExpired;
+        previous.missesCold = stats.missesCold;
         previous.sets = stats.sets;
 
-        output.push(
-          `      └─ Manutenção: ${stats.evictions} evictions, ${stats.cleanups} cleanups`
-        );
+        output.push(`      └─ Manutenção:`);
+        output.push(`         └─ ${stats.evictionsTTL} removidos por TTL`);
+        output.push(`         └─ ${stats.evictions} por limite`);
+        output.push(`         └─ ${stats.cleanups} limpezas`);
 
+        output.push(`      └─ Conteúdo:`);
         output.push(
-          `      └─ Conteúdo:
-            └─ ${stats.objectsInCache} objetos ${this._getTendency(
+          `         └─ ${stats.objectsInCache} objetos ${this._getTendency(
             stats.objectsInCache,
             previous.objectsInCache
-          )}
-            └─ ${stats.clonesInCache} clones ${this._getTendency(
+          )}`
+        );
+        output.push(
+          `         └─ ${stats.clonesInCache} clones ${this._getTendency(
             stats.clonesInCache,
             previous.clonesInCache
           )}`
         );
+
+        previous.evictions = stats.evictions;
+        previous.evictionsTTL = stats.evictionsTTL;
         previous.objectsInCache = stats.objectsInCache;
         previous.clonesInCache = stats.clonesInCache;
+        previous.avgSetLatencyMS = stats.avgSetLatencyMS;
+        previous.maxSetLatencyMS = stats.maxSetLatencyMS;
       }
 
       return output.join('\n');
