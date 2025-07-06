@@ -3,7 +3,6 @@
  * @typedef {import('../types/taskQueue.types.js').TaskOptions} TaskOptions
  * @typedef {import('../types/taskQueue.types.js').ErrorHandler} ErrorHandler
  * @typedef {import('../types/taskQueue.types.js').QueueOptions} QueueOptions
- * @typedef {import('../types/taskQueue.types.js').QueueStats} QueueStats
  * @typedef {import('../types/taskQueue.types.js').QueueStatus} QueueStatus
  * @typedef {import('../types/taskQueue.types.js').TaskStatus} TaskStatus
  * @typedef {import('../types/cache.types.js').HeapItem} HeapItem
@@ -59,12 +58,18 @@ class ScheduledTask {
 
     /**@type {boolean} Se a tarefa está pausada */
     this.isPaused = false;
+    
+    /** @type {number|null} Timestamp em que a tarefa foi pausada */
+    this.pausedAt = null
 
     /** @type {number} Número máximo de execuções permitidas */
     this.maxExecutions = options.maxExecutions || Infinity;
 
     /** @type {ErrorHandler|null} Callback para tratamento de erros */
     this.onError = options.onError || null;
+
+    /** @type {number} Contador de erros ocorridos durante a execução da tarefa */
+    this.errorCount = 0
 
     /** @type {Object|null} Contexto (this) para execução da função */
     this.context = options.context || null;
@@ -121,6 +126,8 @@ class ScheduledTask {
       if (this.onError) {
         this.onError(error, this);
       }
+
+      this.errorCount++
 
       // Agenda próxima execução mesmo com erro
       this.scheduleNext();

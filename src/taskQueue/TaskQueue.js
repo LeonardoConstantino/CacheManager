@@ -3,8 +3,10 @@
  * @typedef {import('../types/taskQueue.types.js').TaskOptions} TaskOptions
  * @typedef {import('../types/taskQueue.types.js').ErrorHandler} ErrorHandler
  * @typedef {import('../types/taskQueue.types.js').QueueOptions} QueueOptions
- * @typedef {import('../types/taskQueue.types.js').QueueStats} QueueStats
+ * @typedef {import('../types/taskQueue.types.js').PerformanceMetrics} PerformanceMetrics
+ * @typedef {import('../types/taskQueue.types.js').ExecutionTimeStats} ExecutionTimeStats
  * @typedef {import('../types/taskQueue.types.js').QueueStatus} QueueStatus
+ * @typedef {import('../types/taskQueue.types.js').TaskQueueMetrics} TaskQueueMetrics
  * @typedef {import('../types/taskQueue.types.js').TaskStatus} TaskStatus
  * @typedef {import('../types/cache.types.js').HeapItem} HeapItem
  */
@@ -47,6 +49,9 @@ class TaskQueue {
     /** @type {number} Intervalo mínimo entre verificações para evitar busy-waiting */
     this.minTickInterval = options.minTickInterval || 100;
 
+    /** @type {number} Intervalo máximo entre verificações para evitar atrasos */
+    this.maxTickInterval = options.maxTickInterval ?? 5000;
+
     /** @type {number} Máximo de tarefas executando simultaneamente */
     this.maxConcurrent = options.maxConcurrent || 1;
 
@@ -56,13 +61,60 @@ class TaskQueue {
     /** @type {boolean} Flag indicando se o objeto foi destruído, prevenindo operações em estado inválido */
     this.destroyed = false;
 
-    /** @type {QueueStats} Objeto com estatísticas detalhadas de performance */
+    /** @type {QueueStatus} Objeto com estatísticas detalhadas de performance */
     this.stats = {
+      /**@type {boolean} Indica se a fila está em execução */
+      isRunning: this.isRunning,
+
+      /**@type {number} Total de tarefas na fila */
+      totalTasks: this.tasks.size,
+
       /** @type {number} Total de execuções realizadas */
       totalExecutions: 0,
 
       /** @type {number} Total de erros ocorridos durante execuções */
       totalErrors: 0,
+
+      /**@type {number} Número de tarefas ativas */
+      activeTasks: 0,
+      /**@type {number} Número de tarefas executando atualmente*/
+      currentlyExecuting: 0,
+      /**@type {number|null} Tempo até próxima execução em ms*/
+      nextExecutionIn: 0,
+      /**@type {number} Tamanho atual do heap de execução*/
+      heapSize: 0,
+      /**@type {number} Total de tarefas pausadas*/
+      pausedTasks: 0,
+      /**@type {string} Tempo de atividade da fila formatado*/
+      uptime: '',
+      /**@type {number} Tempo de atividade em milissegundos*/
+      uptimeMs: 0,
+      /**@type {string} Eficiência do heap em percentual*/
+      heapEfficiency: '',
+      /**@type {string} Taxa de erro em percentual*/
+      errorRate: '',
+      /**@type {string} Execuções por minuto*/
+      executionsPerMinute: '',
+      /**@type {number} Tempo médio entre execuções em ms*/
+      avgTimeBetweenExecutions: 0,
+      /**@type {PerformanceMetrics} Métricas detalhadas de performance*/
+      performance: {
+        availableConcurrencySlots: 0,
+        concurrencyUtilization: '0%',
+        executionTimeStats: {
+          min: 0,
+          max: 0,
+          median: 0,
+          average: 0,
+        },
+        throughput: '',
+        priorityDistribution: {
+          high: 0,
+          medium: 0,
+          low: 0,
+          custom: {},
+        },
+      },
 
       /** @type {number} NOVA métrica - Total de execuções puladas por debounce */
       totalSkippedByDebounce: 0,
@@ -86,7 +138,6 @@ class TaskQueue {
     /** @type {Object} Objeto para logging com métodos info, warn, error, debug */
     this.logger = options.logger || console;
   }
-
   /**
    * Adiciona nova tarefa à fila e mantém heap organizado automaticamente
    * Substitui tarefa existente se ID já existir
@@ -163,39 +214,17 @@ class TaskQueue {
 
   /**
    * OTIMIZAÇÃO: Remove item específico do heap por ID
-   * Reconstrói heap sem o item removido (MinHeap não tem remoção nativa por key)
    * @private
    * @param {string} id - ID da tarefa a ser removida do heap
    */
   removeFromHeap(id) {
-  const remainingItems = [];
-  let removedCount = 0;
-
-  // Extrai todos os itens, filtrando o que deve ser removido
-  while (this.executionHeap.size() > 0) {
-    const item = this.executionHeap.pop();
-    
-    if (!item) {
-      continue;
-    }
-    
-    if (item.key === id) {
-      removedCount++;
+    const removed = this.executionHeap.remove(id);
+    if (!removed) {
+      this.logger.debug(`ℹ️ Nenhum item com id '${id}' encontrado no heap.`);
     } else {
-      remainingItems.push(item);
+      this.logger.debug(`✔️ Tarefa '${id}' removida do heap.`);
     }
   }
-
-  // CORREÇÃO: Reconstrói heap apenas com itens válidos
-  remainingItems
-    .filter((item) => item && this.tasks.has(item.key))
-    .forEach((item) => this.executionHeap.push(item));
-
-  // Log se múltiplos itens foram removidos (indica problema)
-  if (removedCount > 1) {
-    this.logger.warn(`Múltiplos itens removidos do heap para tarefa '${id}': ${removedCount}`);
-  }
-}
 
   /**
    * OTIMIZAÇÃO: Inicia processamento com timer dinâmico baseado na próxima execução
@@ -298,6 +327,7 @@ class TaskQueue {
     const task = this.tasks.get(id);
     if (task && !task.isPaused) {
       task.isPaused = true;
+      task.pausedAt = Date.now();
       this.logger.info(`Tarefa '${id}' pausada`);
     }
   }
@@ -315,304 +345,212 @@ class TaskQueue {
   }
 
   /**
-   * OTIMIZAÇÃO: Processa apenas tarefas prontas usando heap para eficiência
-   * Extrai tarefas do heap, ordena por prioridade e executa respeitando concorrência
-   * @private
-   * @async
-   */
-  async _processTasks() {
-    // Para processamento se não há tarefas
-    if (this.tasks.size === 0) {
-      this.stop();
-      return;
-    }
-
-    // Extrai tarefas prontas do heap eficientemente
-    const readyTasks = this._getReadyTasksFromHeap().filter(
-      (task) => !task.isPaused
-    );
-
-    // Sai se nenhuma tarefa está pronta
-    if (readyTasks.length === 0) {
-      return; // Nenhuma tarefa pronta para execução
-    }
-
-    // Ordena tarefas por prioridade (maior prioridade primeiro)
-    readyTasks.sort((a, b) => b.priority - a.priority);
-
-    // Calcula slots disponíveis para execução baseado na concorrência
-    const availableSlots = this.maxConcurrent - this.currentlyExecuting.size;
-    const tasksToExecute = readyTasks.slice(0, availableSlots);
-
-    // Executa tarefas respeitando limite de concorrência
-    for (const task of tasksToExecute) {
-      // Double-check de concorrência por segurança
-      if (this.currentlyExecuting.size >= this.maxConcurrent) {
-        break;
-      }
-      // Executa tarefa de forma assíncrona (não-bloqueante)
-      this._executeTask(task);
-    }
-
-    // Limpeza automática de tarefas inativas
-    this._cleanupInactiveTasks();
-    this._cleanupOrphanedHeapItems();
-  }
-
-  /**
-   * OTIMIZAÇÃO: Extrai tarefas prontas do heap eficientemente
-   * Processa heap até encontrar tarefa não-pronta, mantendo ordem
-   * @private
-   * @returns {ScheduledTask[]} Array de tarefas prontas para execução
-   */
-  _getReadyTasksFromHeap() {
-  const readyTasks = [];
-  const currentTime = Date.now();
-  const tempItems = [];
-
-  // CORREÇÃO: Limita processamento para evitar loops infinitos
-  let processedCount = 0;
-  const maxProcessItems = Math.min(this.executionHeap.size(), 1000);
-
-  while (this.executionHeap.size() > 0 && processedCount < maxProcessItems) {
-    const item = this.executionHeap.peek();
-    
-    if (!item) {
-      // CORREÇÃO: Remove item nulo/inválido
-      this.executionHeap.pop();
-      processedCount++;
-      continue;
-    }
-
-    // Se item não está pronto, para a busca (heap está ordenado)
-    if (item.expiresAt > currentTime) {
-      break;
-    }
-
-    // Remove item do heap
-    const heapItem = this.executionHeap.pop();
-    processedCount++;
-
-    if (!heapItem) continue;
-
-    // CORREÇÃO: Verifica se tarefa ainda existe antes de processar
-    const task = this.tasks.get(heapItem.key);
-    
-    if (!task) {
-      // CORREÇÃO: Item órfão detectado - não reinsere no heap
-      this.logger.debug(`Item órfão removido do heap: ${heapItem.key}`);
-      continue;
-    }
-
-    // CORREÇÃO: Verifica se tarefa está realmente ativa
-    if (!task.isActive) {
-      // CORREÇÃO: Tarefa inativa - não reinsere no heap
-      this.logger.debug(`Tarefa inativa removida do heap: ${task.id}`);
-      continue;
-    }
-
-    // Verifica se deve executar (inclui debounce)
-    if (task.shouldExecute()) {
-      readyTasks.push(task);
-    } else {
-      // Tarefa bloqueada por debounce
-      this.stats.totalSkippedByDebounce++;
-      this.logger.debug(`Tarefa '${task.id}' pulada por debounce`);
-    }
-
-    // CORREÇÃO: Re-agenda apenas se tarefa ainda está ativa
-    if (task.isActive) {
-      tempItems.push(task.toHeapItem());
-    }
-  }
-
-  // Reinsere apenas itens válidos no heap
-  tempItems.forEach((item) => {
-    if (item && this.tasks.has(item.key)) {
-      this.executionHeap.push(item);
-    }
-  });
-
-  return readyTasks;
-}
-
-  /**
-   * Executa tarefa individual e atualiza heap automaticamente
-   * Gerencia concorrência e estatísticas de execução
-   * @private
-   * @async
-   * @param {ScheduledTask} task - Tarefa a ser executada
-   */
-  async _executeTask(task) {
-    // Previne execução duplicada da mesma tarefa
-    if (this.currentlyExecuting.has(task.id)) {
-      return;
-    }
-
-    // Marca tarefa como executando e registra timestamp inicial
-    this.currentlyExecuting.add(task.id);
-    const startTime = Date.now();
-
-    try {
-      this.logger.debug(`Executando '${task.id}'`);
-
-      // Executa a tarefa assincronamente
-      await task.execute();
-
-      // Calcula tempo de execução para estatísticas
-      const executionTime = Date.now() - startTime;
-      this._updateStats(executionTime, false);
-
-      // OTIMIZAÇÃO: Re-adiciona ao heap se ainda ativa
-      if (task.isActive) {
-        this.executionHeap.push(task.toHeapItem());
-      }
-
-      this.logger.debug(
-        `'${task.id}' concluída (${executionTime}ms)`
-      );
-    } catch (error) {
-      // Calcula tempo mesmo em caso de erro
-      const executionTime = Date.now() - startTime;
-      this._updateStats(executionTime, true);
-
-      // Re-adiciona mesmo com erro se ainda ativa
-      if (task.isActive) {
-        this.executionHeap.push(task.toHeapItem());
-      }
-
-      this.logger.error(`Erro em '${task.id}':`, error);
-    } finally {
-      // Remove da lista de execução em qualquer caso
-      this.currentlyExecuting.delete(task.id);
-    }
-  }
-
-  /**
-   * Remove automaticamente tarefas inativas da fila
-   * Melhora performance removendo tarefas que não executarão mais
-   * @private
-   */
-  _cleanupInactiveTasks() {
-    // Encontra todas as tarefas inativas
-    const inactiveTasks = Array.from(this.tasks.entries()).filter(
-      ([_, task]) => !task.isActive
-    );
-
-    // Remove cada tarefa inativa
-    for (const [id, _] of inactiveTasks) {
-      this.removeTask(id);
-    }
-  }
-
-  /**
-   * Atualiza estatísticas de execução com novos dados
-   * Mantém histórico limitado para cálculo de médias
-   * @private
-   * @param {number} executionTime - Tempo de execução em milissegundos
-   * @param {boolean} wasError - Se a execução resultou em erro
-   */
-  _updateStats(executionTime, wasError) {
-    // Incrementa contadores totais
-    this.stats.totalExecutions++;
-    if (wasError) this.stats.totalErrors++;
-
-    // Adiciona tempo ao histórico
-    this.stats.executionTimes.push(executionTime);
-
-    // Mantém apenas últimos 100 tempos para performance
-    if (this.stats.executionTimes.length > 100) {
-      this.stats.executionTimes.shift();
-    }
-
-    // Recalcula média com dados atuais
-    this.stats.avgExecutionTime =
-      this.stats.executionTimes.reduce((a, b) => a + b, 0) /
-      this.stats.executionTimes.length;
-  }
-
-  /**
    * Retorna status completo e otimizado com informações do heap
-   * Fornece visão detalhada do estado atual da fila
-   * @returns {QueueStatus} Objeto com status completo da fila
+   * Fornece visão detalhada do estado atual da fila incluindo novas métricas
+   * de performance, eficiência e análise de problemas
+   *
+   * @returns {TaskQueueMetrics} Objeto com status completo da fila incluindo métricas avançadas
    * @example
    * const status = queue.getStatus();
    * console.log(`Executando: ${status.currentlyExecuting}/${status.maxConcurrent}`);
    * console.log(`Próxima execução em: ${status.nextExecutionIn}ms`);
+   * console.log(`Uptime: ${status.uptime}`);
+   * console.log(`Taxa de erro: ${status.errorRate}`);
+   * console.log(`Throughput: ${status.performance.throughput} tarefas/s`);
+   *
+   * @since 1.0.0
+   * @memberof QueueManager
    */
   getStatus() {
-    // Filtra apenas tarefas ativas para contagem
     const activeTasks = Array.from(this.tasks.values()).filter(
       (t) => t.isActive
     );
+    const pausedTasks = Array.from(this.tasks.values()).filter(
+      (t) => t.isPaused
+    );
 
-    // Calcula tempo até próxima execução baseado no heap
-    // Verifica se o heap existe e tem tamanho maior que zero antes de acessar
+    // Calcula tempo até próxima execução
     const nextExecution =
       this.executionHeap && this.executionHeap.size() > 0
-        ? Math.max(0, this.executionHeap.peek()?.expiresAt || 0 - Date.now())
+        ? Math.max(
+            0,
+            this.executionHeap.peek()?.expiresAt || 0 - Date.now() || 0
+          )
         : null;
 
+    // NOVA MÉTRICA: Calcula uptime da fila
+    const uptime = this.stats.queueStartTime
+      ? Date.now() - this.stats.queueStartTime
+      : 0;
+
+    // NOVA MÉTRICA: Detecta possível vazamento de heap
+    const heapEfficiency =
+      this.tasks.size > 0
+        ? (
+            (this.tasks.size / Math.max(this.executionHeap.size(), 1)) *
+            100
+          ).toFixed(2)
+        : '100.00';
+
+    // NOVA MÉTRICA: Calcula taxa de erro
+    const errorRate =
+      this.stats.totalExecutions > 0
+        ? ((this.stats.totalErrors / this.stats.totalExecutions) * 100).toFixed(
+            2
+          )
+        : '0.00';
+
+    // NOVA MÉTRICA: Calcula execuções por minuto
+    const executionsPerMinute =
+      uptime > 0
+        ? (this.stats.totalExecutions / (uptime / 60000) || 0).toFixed(2)
+        : '0.00';
+
+    // NOVA MÉTRICA: Analisa distribuição de prioridades
+    const priorityDistribution = this._analyzePriorityDistribution();
+
+    // NOVA MÉTRICA: Calcula tempo médio entre execuções
+    const avgTimeBetweenExecutions = this._calculateExecutionIntervalEstimate();
+
+    // NOVA MÉTRICA: Detecta tarefas problemáticas
+    const problematicTasks = this._detectProblematicTasks();
+
     return {
-      /** @type {boolean} Se a fila está processando */
+      // Métricas básicas existentes
       isRunning: this.isRunning,
-
-      /** @type {number} Total de tarefas na fila */
       totalTasks: this.tasks.size,
-
-      /** @type {number} Número de tarefas ativas */
       activeTasks: activeTasks.length,
-
-      /** @type {number} Tarefas executando no momento */
       currentlyExecuting: this.currentlyExecuting.size,
-
-      /** @type {number|null} Tempo até próxima execução em ms */
       nextExecutionIn: nextExecution,
-
-      /** @type {number} NOVA métrica - Tamanho atual do heap */
       heapSize: this.executionHeap?.size() || 0,
 
-      /** @type {QueueStats} Estatísticas detalhadas com eficiência de debounce */
-      stats: {
-        ...this.stats,
-        /** @type {string} Porcentagem de eficiência do debounce */
-        debounceEfficiency:
-          this.stats.totalExecutions > 0
-            ? (
-                (this.stats.totalSkippedByDebounce /
-                  this.stats.totalExecutions) *
-                100
-              ).toFixed(2) + '%'
-            : '0%',
+      // ==========================================
+      // NOVAS MÉTRICAS ESSENCIAIS
+      // ==========================================
+
+      /** @type {number} Total de tarefas pausadas */
+      pausedTasks: pausedTasks.length,
+
+      /** @type {string} Tempo que a fila está ativa (formato legível) */
+      uptime: this._formatUptime(uptime),
+
+      /** @type {number} Uptime em milissegundos */
+      uptimeMs: uptime,
+
+      /** @type {string} Eficiência do heap (% de tarefas vs itens no heap) */
+      heapEfficiency: heapEfficiency + '%',
+
+      /** @type {string} Taxa de erro percentual */
+      errorRate: errorRate + '%',
+
+      /** @type {string} Execuções por minuto */
+      executionsPerMinute: executionsPerMinute,
+
+      /** @type {number} Tempo médio entre execuções em ms */
+      avgTimeBetweenExecutions: avgTimeBetweenExecutions,
+
+      // ==========================================
+      // MÉTRICAS DE PERFORMANCE
+      // ==========================================
+      performance: {
+        /** @type {number} Slots de concorrência disponíveis */
+        availableConcurrencySlots:
+          this.maxConcurrent - this.currentlyExecuting.size,
+
+        /** @type {string} Utilização da concorrência */
+        concurrencyUtilization:
+          ((this.currentlyExecuting.size / this.maxConcurrent) * 100).toFixed(
+            2
+          ) + '%',
+
+        /** @type {ExecutionTimeStats} Tempo mínimo/máximo/mediano de execução */
+        executionTimeStats: this._calculateExecutionTimeStats(),
+
+        /** @type {string} Throughput (tarefas/segundo) */
+        throughput:
+          uptime > 0
+            ? (this.stats.totalExecutions / (uptime / 1000) || 0).toFixed(2)
+            : '0.00',
+
+        /** @type {Object} Distribuição de prioridades */
+        priorityDistribution: priorityDistribution,
       },
 
-      /** @type {TaskStatus[]} Detalhes completos de todas as tarefas */
+      // ==========================================
+      // MÉTRICAS DE SAÚDE DO SISTEMA
+      // ==========================================
+      health: {
+        /** @type {string} Status geral da fila */
+        status: this._calculateHealthStatus(),
+
+        /** @type {boolean} Se há possível vazamento de heap */
+        possibleHeapLeak: this.executionHeap.size() > this.tasks.size * 3,
+
+        /** @type {boolean} Se há tarefas travadas */
+        hasStuckTasks:
+          this.currentlyExecuting.size > 0 && this.stats.totalExecutions === 0,
+
+        /** @type {string[]} Alertas detectados */
+        alerts: this._generateHealthAlerts(),
+
+        /** @type {Object[]} Tarefas problemáticas */
+        problematicTasks: problematicTasks,
+      },
+
+      // ==========================================
+      // MÉTRICAS DE DEBOUNCE
+      // ==========================================
+      debounceMetrics: {
+        /** @type {number} Total de tarefas com debounce */
+        tasksWithDebounce: Array.from(this.tasks.values()).filter(
+          (t) => t.debouncer
+        ).length,
+
+        /** @type {string} Eficiência do debounce atualizada */
+        debounceEfficiency: this._calculateDebounceEfficiency(),
+
+        /** @type {number} Economia de execuções pelo debounce */
+        executionsSaved: this.stats.totalSkippedByDebounce,
+      },
+
+      // Estatísticas existentes aprimoradas
+      stats: {
+        ...this.stats,
+        debounceEfficiency: this._calculateDebounceEfficiency(),
+      },
+
+      // Detalhes das tarefas com métricas adicionais
       taskDetails: Array.from(this.tasks.values()).map((task) => ({
-        /** @type {string} ID da tarefa */
         id: task.id,
-
-        /** @type {boolean} Se a tarefa está ativa */
         isActive: task.isActive,
-
-        /** @type {number} Número de execuções realizadas */
+        isPaused: task.isPaused || false,
         executionCount: task.executionCount,
-
-        /** @type {number} Tempo até próxima execução em ms */
         nextExecutionIn: task.timeUntilNext(),
-
-        /** @type {number} Prioridade da tarefa */
         priority: task.priority,
 
-        /** @type {Object} Informações detalhadas sobre debounce */
+        // NOVAS MÉTRICAS POR TAREFA
+        /** @type {string} Última execução (tempo relativo) */
+        lastExecution: task.lastExecution
+          ? this._formatRelativeTime(Date.now() - task.lastExecution)
+          : 'Nunca',
+
+        /** @type {string} Frequência de execução */
+        executionFrequency:
+          task.executionCount > 0 && uptime > 0
+            ? (task.executionCount / (uptime / 60000) || 0).toFixed(2) + '/min'
+            : '0/min',
+
+        /** @type {string} Status da tarefa */
+        status: this._getTaskStatus(task),
+
         debounce: {
-          /** @type {boolean} Se debounce está habilitado */
           enabled: !!task.debouncer,
-
-          /** @type {number} Tempo de debounce configurado */
           time: task.debounceTime ?? 0,
-
-          /** @type {boolean} Se pode executar agora (não bloqueado) */
           canCall: task.debouncer ? task.debouncer.canCall() : true,
+          /** @type {string} Tempo restante de debounce */
+          timeRemaining: task.debouncer
+            ? this._getDebounceTimeRemaining(task)
+            : '0ms',
         },
       })),
     };
@@ -734,50 +672,374 @@ class TaskQueue {
     this._destroyed = true;
   }
 
+  // ==========================================
+  //            MÉTODOS PRIVADOS
+  // ==========================================
+
   /**
- * CORREÇÃO: Limpa itens órfãos do heap que não correspondem a tarefas ativas
- * Previne vazamento de memória no heap
- * @private
- */
-_cleanupOrphanedHeapItems() {
-  // Executa limpeza apenas periodicamente para não impactar performance
-  if (this.stats.totalExecutions % 100 !== 0) {
-    return;
-  }
-
-  const validItems = [];
-  const currentTime = Date.now();
-  let orphanedCount = 0;
-
-  // Processa todos os itens do heap
-  while (this.executionHeap.size() > 0) {
-    const item = this.executionHeap.pop();
-    
-    if (!item) {
-      orphanedCount++;
-      continue;
+   * OTIMIZAÇÃO: Processa apenas tarefas prontas usando heap para eficiência
+   * Extrai tarefas do heap, ordena por prioridade e executa respeitando concorrência
+   * @private
+   * @async
+   */
+  async _processTasks() {
+    if (this.tasks.size === 0) {
+      this.stop();
+      return;
     }
 
-    // Verifica se item corresponde a uma tarefa ativa
-    const task = this.tasks.get(item.key);
-    
-    if (task && task.isActive) {
-      // Item válido - mantém no heap
-      validItems.push(item);
-    } else {
-      // Item órfão - descarta
-      orphanedCount++;
+    const currentTime = Date.now();
+    const allItems = this.executionHeap.extractAll(); // Esvazia o heap e nos dá uma cópia
+    const tasksToReinsert = [];
+    let readyTasks = [];
+
+    for (const item of allItems) {
+      const task = this.tasks.get(item.key);
+
+      // Validação: descarta tarefas órfãs ou inativas
+      if (!task || !task.isActive) {
+        this.logger.debug(`Item descartado: ${item.key} (inativo ou órfão)`);
+        continue;
+      }
+
+      // Triagem: tarefa pronta ou futura?
+      if (item.expiresAt <= currentTime) {
+        // Tarefa está pronta. Verificar debounce.
+        if (task.shouldExecute()) {
+          readyTasks.push(task);
+        } else {
+          this.stats.totalSkippedByDebounce++;
+          this.logger.debug(`Tarefa '${task.id}' pulada por debounce.`);
+          // A tarefa pulada também deve ser reinserida.
+          tasksToReinsert.push(task);
+        }
+      } else {
+        // Tarefa ainda não está pronta, deve voltar para o heap.
+        tasksToReinsert.push(task);
+      }
+    }
+
+    // Re-adiciona as tarefas que foram executadas também, pois elas precisam de um novo agendamento.
+    readyTasks.forEach((task) => tasksToReinsert.push(task));
+
+    // Reconstrói o heap com todas as tarefas válidas e ativas
+    tasksToReinsert.forEach((task) => {
+      if (task.isActive) {
+        // dupla checagem caso uma tarefa tenha se tornado inativa durante a execução
+        this.executionHeap.push(task.toHeapItem());
+      }
+    });
+
+    // Ordena as tarefas prontas por prioridade para execução
+    readyTasks.sort((a, b) => b.priority - a.priority);
+
+    const availableSlots = this.maxConcurrent - this.currentlyExecuting.size;
+    const tasksToExecute = readyTasks.slice(0, availableSlots);
+
+    // Dispara a execução (sem await, para rodar em paralelo)
+    for (const task of tasksToExecute) {
+      this._executeTask(task);
+    }
+
+    // A limpeza de tarefas inativas do mapa `this.tasks` ainda é útil.
+    this._cleanupInactiveTasks();
+  }
+
+  /**
+   * Executa tarefa individual e atualiza heap automaticamente
+   * Gerencia concorrência e estatísticas de execução
+   * @private
+   * @async
+   * @param {ScheduledTask} task - Tarefa a ser executada
+   */
+  async _executeTask(task) {
+    if (this.currentlyExecuting.has(task.id)) return;
+    this.currentlyExecuting.add(task.id);
+    const startTime = Date.now();
+    try {
+      await task.execute();
+      this._updateStats(Date.now() - startTime, false);
+    } catch (error) {
+      this._updateStats(Date.now() - startTime, true);
+      this.logger.error(`Erro em '${task.id}':`, error);
+    } finally {
+      this.currentlyExecuting.delete(task.id);
     }
   }
 
-  // Reconstrói heap apenas com itens válidos
-  validItems.forEach((item) => this.executionHeap.push(item));
+  /**
+   * Remove automaticamente tarefas inativas da fila
+   * Melhora performance removendo tarefas que não executarão mais
+   * @private
+   */
+  _cleanupInactiveTasks() {
+    // Encontra todas as tarefas inativas
+    const inactiveTasks = Array.from(this.tasks.entries()).filter(
+      ([_, task]) => !task.isActive
+    );
 
-  // Log da limpeza se itens foram removidos
-  if (orphanedCount > 0) {
-    this.logger.debug(`Limpeza do heap: ${orphanedCount} itens órfãos removidos`);
+    // Remove cada tarefa inativa
+    for (const [id, _] of inactiveTasks) {
+      this.removeTask(id);
+    }
   }
-}
+
+  /**
+   * Atualiza estatísticas de execução com novos dados
+   * Mantém histórico limitado para cálculo de médias
+   * @private
+   * @param {number} executionTime - Tempo de execução em milissegundos
+   * @param {boolean} wasError - Se a execução resultou em erro
+   */
+  _updateStats(executionTime, wasError) {
+    // Incrementa contadores totais
+    this.stats.totalExecutions++;
+    if (wasError) this.stats.totalErrors++;
+
+    // Adiciona tempo ao histórico
+    this.stats.executionTimes.push(executionTime);
+
+    // Mantém apenas últimos 100 tempos para performance
+    if (this.stats.executionTimes.length > 100) {
+      this.stats.executionTimes.shift();
+    }
+
+    // Recalcula média com dados atuais
+    this.stats.avgExecutionTime =
+      this.stats.executionTimes.reduce((a, b) => a + b, 0) /
+      this.stats.executionTimes.length;
+  }
+
+  // ==========================================
+  //          AUXILIARES PARA MÉTRICAS
+  // ==========================================
+
+  /**
+   * Formata uptime em formato legível
+   * @private
+   * @param {number} ms - Tempo em milissegundos
+   * @returns {string} Tempo formatado
+   */
+  _formatUptime(ms) {
+    const seconds = Math.floor(ms / 1000) % 60;
+    const minutes = Math.floor(ms / (1000 * 60)) % 60;
+    const hours = Math.floor(ms / (1000 * 60 * 60)) % 24;
+    const days = Math.floor(ms / (1000 * 60 * 60 * 24));
+
+    if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    if (minutes > 0) return `${minutes}m ${seconds}s`;
+    return `${seconds}s`;
+  }
+
+  /**
+   * Calcula estatísticas de tempo de execução
+   * @private
+   * @returns {Object} Estatísticas de tempo
+   */
+  _calculateExecutionTimeStats() {
+    if (this.stats.executionTimes.length === 0) {
+      return { min: 0, max: 0, median: 0, p95: 0 };
+    }
+
+    const sorted = [...this.stats.executionTimes].sort((a, b) => a - b);
+    const p95Index = Math.floor(sorted.length * 0.95);
+    const medianIndex = Math.floor(sorted.length / 2);
+
+    return {
+      min: sorted[0],
+      max: sorted[sorted.length - 1],
+      median: sorted[medianIndex],
+      p95: sorted[p95Index],
+    };
+  }
+
+  /**
+   * Calcula status geral de saúde
+   * @private
+   * @returns {string} Status de saúde
+   */
+  _calculateHealthStatus() {
+    const errorRate =
+      this.stats.totalExecutions > 0
+        ? (this.stats.totalErrors / this.stats.totalExecutions) * 100
+        : 0;
+
+    const heapLeak = this.executionHeap.size() > this.tasks.size * 3;
+
+    if (heapLeak) return '🔴 CRÍTICO';
+    if (errorRate > 10) return '🟡 ATENÇÃO';
+    if (errorRate > 0) return '🟢 ESTÁVEL';
+    return '✅ SAUDÁVEL';
+  }
+
+  /**
+   * Gera alertas de saúde do sistema
+   * @private
+   * @returns {string[]} Array de alertas
+   */
+  _generateHealthAlerts() {
+    const alerts = [];
+
+    // Alerta de vazamento de heap
+    if (this.executionHeap.size() > this.tasks.size * 3) {
+      alerts.push('🚨 Possível vazamento de heap detectado');
+    }
+
+    // Alerta de alta taxa de erro
+    const errorRate =
+      this.stats.totalExecutions > 0
+        ? (this.stats.totalErrors / this.stats.totalExecutions) * 100
+        : 0;
+    if (errorRate > 10) {
+      alerts.push(`⚠️ Alta taxa de erro: ${errorRate.toFixed(2)}%`);
+    }
+
+    // Alerta de tarefas travadas
+    if (this.currentlyExecuting.size >= this.maxConcurrent) {
+      alerts.push('⏸️ Todos os slots de concorrência ocupados');
+    }
+
+    // Alerta de muitas tarefas pausadas
+    const pausedCount = Array.from(this.tasks.values()).filter(
+      (t) => t.isPaused
+    ).length;
+    if (pausedCount > 0) {
+      alerts.push(`⏸️ ${pausedCount} tarefa(s) pausada(s)`);
+    }
+
+    return alerts;
+  }
+
+  /**
+   * Analisa distribuição de prioridades
+   * @private
+   * @returns {Object} Distribuição de prioridades
+   */
+  _analyzePriorityDistribution() {
+    const distribution = {};
+
+    Array.from(this.tasks.values()).forEach((task) => {
+      const priority = task.priority || 0;
+      distribution[priority] = (distribution[priority] || 0) + 1;
+    });
+
+    return distribution;
+  }
+
+  /**
+   * Estima o intervalo médio de execução com base no tempo total de atividade
+   * @private
+   * @returns {number} Tempo médio em ms
+   */
+  _calculateExecutionIntervalEstimate() {
+    if (this.stats.totalExecutions <= 1) return 0;
+
+    const uptime = this.stats.queueStartTime
+      ? Date.now() - this.stats.queueStartTime
+      : 0;
+
+    return uptime / this.stats.totalExecutions;
+  }
+
+  /**
+   * Detecta tarefas problemáticas
+   * @private
+   * @returns {Object[]} Array de tarefas problemáticas
+   */
+  _detectProblematicTasks() {
+    const problematic = [];
+
+    Array.from(this.tasks.values()).forEach((task) => {
+      const issues = [];
+
+      // Tarefa não executou há muito tempo
+      if (
+        task.lastExecution &&
+        Date.now() - task.lastExecution > task.interval * 3
+      ) {
+        issues.push('Não executou há muito tempo');
+      }
+
+      // Tarefa com muitos erros
+      if (task.errorCount > 5) {
+        issues.push(`${task.errorCount} erros consecutivos`);
+      }
+
+      // Tarefa pausada há muito tempo
+      if (
+        task.isPaused &&
+        task.pausedAt &&
+        Date.now() - task.pausedAt > 300000
+      ) {
+        issues.push('Pausada há mais de 5 minutos');
+      }
+
+      if (issues.length > 0) {
+        problematic.push({
+          id: task.id,
+          issues: issues,
+          priority: task.priority,
+        });
+      }
+    });
+
+    return problematic;
+  }
+
+  /**
+   * Calcula eficiência do debounce
+   * @private
+   * @returns {string} Eficiência formatada
+   */
+  _calculateDebounceEfficiency() {
+    const total =
+      this.stats.totalExecutions + this.stats.totalSkippedByDebounce;
+    return total > 0
+      ? ((this.stats.totalSkippedByDebounce / total) * 100).toFixed(2) + '%'
+      : '0%';
+  }
+
+  /**
+   * Formata tempo relativo
+   * @private
+   * @param {number} ms - Tempo em milissegundos
+   * @returns {string} Tempo formatado
+   */
+  _formatRelativeTime(ms) {
+    if (ms < 60000) return `${Math.floor(ms / 1000)}s atrás`;
+    if (ms < 3600000) return `${Math.floor(ms / 60000)}m atrás`;
+    if (ms < 86400000) return `${Math.floor(ms / 3600000)}h atrás`;
+    return `${Math.floor(ms / 86400000)}d atrás`;
+  }
+
+  /**
+   * Obtém status da tarefa
+   * @private
+   * @param {ScheduledTask} task - Tarefa a analisar
+   * @returns {string} Status da tarefa
+   */
+  _getTaskStatus(task) {
+    if (!task.isActive) return '❌ Inativa';
+    if (task.isPaused) return '⏸️ Pausada';
+    if (this.currentlyExecuting.has(task.id)) return '⚡ Executando';
+    if (task.debouncer && !task.debouncer.canCall()) return '⏳ Debounce';
+    return '✅ Pronta';
+  }
+
+  /**
+   * Obtém tempo restante de debounce
+   * @private
+   * @param {ScheduledTask} task - Tarefa a analisar
+   * @returns {string} Tempo restante
+   */
+  _getDebounceTimeRemaining(task) {
+    if (!task.debouncer || task.debouncer.canCall()) return '0ms';
+
+    const remaining =
+      task.debounceTime || 0 - (Date.now() - task.debouncer.lastCall);
+    return remaining > 0 ? `${remaining}ms` : '0ms';
+  }
 }
 
 module.exports = TaskQueue;

@@ -17,10 +17,18 @@ class MinHeap {
   heap = [];
 
   /**
+   * @private
+   * @type {Map<string, number>}
+   * @description Mapeamento de chave para índice no heap para remoção eficiente.
+   */
+  keyToIndex = new Map();
+
+  /**
    * Cria uma instância de um MinHeap vazio.
    */
   constructor() {
     this.heap = [];
+    this.keyToIndex = new Map();
   }
 
   /**
@@ -29,8 +37,15 @@ class MinHeap {
    * @returns {void}
    */
   push(item) {
+    // Se a chave já existe, remove o item antigo primeiro
+    if (this.keyToIndex.has(item.key)) {
+      this.remove(item.key);
+    }
+    
+    const index = this.heap.length;
     this.heap.push(item); // Adiciona o item ao final do array.
-    this._bubbleUp(this.heap.length - 1); // Restaura a propriedade do heap subindo o item.
+    this.keyToIndex.set(item.key, index); // Mapeia a chave para o índice
+    this._bubbleUp(index); // Restaura a propriedade do heap subindo o item.
   }
 
   /**
@@ -41,14 +56,20 @@ class MinHeap {
     if (this.heap.length === 0) return null; // Se o heap estiver vazio, não há nada para remover.
     if (this.heap.length === 1) {
       const lastItem = this.heap.pop(); // Remove o último item
+      if (lastItem) {
+        this.keyToIndex.delete(lastItem.key); // Remove do mapeamento
+      }
       return lastItem || null; // Retorna o item ou null se undefined
     }
 
     const min = this.heap[0]; // Guarda o item mínimo (raiz do heap).
+    this.keyToIndex.delete(min.key); // Remove do mapeamento
+    
     const lastItem = this.heap.pop(); // Remove o último item
     if (lastItem) {
       // Verifica se lastItem não é undefined
       this.heap[0] = lastItem; // Move o último item para a raiz.
+      this.keyToIndex.set(lastItem.key, 0); // Atualiza o mapeamento
       this._bubbleDown(0); // Restaura a propriedade do heap descendo o novo item da raiz.
     }
     return min; // Retorna o item que foi o menor.
@@ -77,6 +98,71 @@ class MinHeap {
    */
   clear() {
     this.heap = []; // Reinicia o array do heap.
+    this.keyToIndex.clear(); // Limpa o mapeamento
+  }
+
+  /**
+   * Retorna uma cópia ordenada de todos os itens do heap, e limpa o heap logo em seguida.
+   * @returns {HeapItem[]} Array com os itens ordenados por `expiresAt`.
+   */
+  extractAll() {
+    // Clona o heap original superficialmente
+    const clone = [...this.heap];
+    // Ordena os itens por expiresAt (menor para maior)
+    const sorted = clone.sort((a, b) => a.expiresAt - b.expiresAt);
+
+    // Limpa o heap
+    this.clear();
+
+    return sorted;
+  }
+
+  /**
+   * Remove um item específico do heap pela sua chave.
+   * @param {string} key - A chave do item a ser removido.
+   * @returns {boolean} True se o item foi encontrado e removido, false caso contrário.
+   */
+  remove(key) {
+    // Verifica se a chave existe no mapeamento
+    const index = this.keyToIndex.get(key);
+    if (index === undefined) {
+      return false; // Item não encontrado
+    }
+
+    // Remove a chave do mapeamento
+    this.keyToIndex.delete(key);
+
+    // Se é o último item, simplesmente remove
+    if (index === this.heap.length - 1) {
+      this.heap.pop();
+      return true;
+    }
+
+    // Se é o único item, limpa o heap
+    if (this.heap.length === 1) {
+      this.heap = [];
+      return true;
+    }
+
+    // Guarda o item que será removido e o último item
+    const removedItem = this.heap[index];
+    const lastItem = this.heap.pop();
+
+    // Se lastItem existe, move para a posição do item removido
+    if (lastItem) {
+      this.heap[index] = lastItem;
+      this.keyToIndex.set(lastItem.key, index);
+
+      // Restaura a propriedade do heap
+      // Verifica se precisa subir ou descer
+      if (index > 0 && this.heap[index].expiresAt < this.heap[Math.floor((index - 1) / 2)].expiresAt) {
+        this._bubbleUp(index);
+      } else {
+        this._bubbleDown(index);
+      }
+    }
+
+    return true;
   }
 
   /**
@@ -93,6 +179,10 @@ class MinHeap {
       const parentIndex = Math.floor((index - 1) / 2);
       // Se o pai for menor ou igual ao item atual, a propriedade do heap é mantida.
       if (this.heap[parentIndex].expiresAt <= this.heap[index].expiresAt) break;
+
+      // Atualiza o mapeamento antes da troca
+      this.keyToIndex.set(this.heap[parentIndex].key, index);
+      this.keyToIndex.set(this.heap[index].key, parentIndex);
 
       // Troca o item atual com seu pai se o item atual for menor.
       [this.heap[parentIndex], this.heap[index]] = [
@@ -136,6 +226,10 @@ class MinHeap {
       // Se o item atual ainda é o menor, a propriedade do heap é restaurada.
       if (minIndex === index) break;
 
+      // Atualiza o mapeamento antes da troca
+      this.keyToIndex.set(this.heap[index].key, minIndex);
+      this.keyToIndex.set(this.heap[minIndex].key, index);
+
       // Troca o item atual com o menor de seus filhos.
       [this.heap[index], this.heap[minIndex]] = [
         this.heap[minIndex],
@@ -149,10 +243,14 @@ class MinHeap {
 module.exports = MinHeap;
 
 /*
+// Exemplos de uso (métodos existentes permanecem inalterados)
 const heap = new MinHeap();
-heap.push({ key: 'item1', expiresAt: Date.now() + 1000 });// Adiciona um item com uma data de expiração de 1 segundo no futuro.
-heap.pop();// Remove e retorna o item com a menor data de expiração.
-heap.peek();// Retorna o item com a menor data de expiração sem removê-lo do heap.
-heap.size();// Retorna o número de itens atualmente no heap.
-heap.clear();// Remove todos os itens do heap, deixando-o vazio.
+heap.push({ key: 'item1', expiresAt: Date.now() + 1000 }); // Adiciona um item
+heap.push({ key: 'item2', expiresAt: Date.now() + 2000 }); // Adiciona outro item
+heap.remove('item1'); // Remove o item com chave 'item1' - NOVO MÉTODO
+heap.pop(); // Remove e retorna o item com a menor data de expiração
+heap.peek(); // Retorna o item com a menor data de expiração sem removê-lo
+heap.extractAll(); // Retorna uma cópia ordenada de todos os itens e limpa o heap
+heap.size(); // Retorna o número de itens atualmente no heap
+heap.clear(); // Remove todos os itens do heap, deixando-o vazio
 */

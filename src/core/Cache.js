@@ -411,6 +411,7 @@ class MyCache {
       if (this._entries.has(next.key)) {
         this._entries.delete(next.key);
         this._removeFromLRU(next.key);
+        this._stats.evictionsTTL++;
         cleanedCount++;
       }
     }

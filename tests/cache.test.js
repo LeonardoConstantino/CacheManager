@@ -684,7 +684,8 @@ class CacheManagerTester {
       const allKeys = cache.keys();
       if (allKeys.length > 0) {
         const randomKey = allKeys[Math.floor(Math.random() * allKeys.length)];
-        const value = cache.get(randomKey);
+        const realRandomKey = Math.random() <= 0.9 ? randomKey : "nonExistentKey";
+        const value = cache.get(realRandomKey);
 
         // Validação do objeto recuperado
         if (value && typeof value === 'object' && value.type) {
@@ -698,6 +699,11 @@ class CacheManagerTester {
               `🔍 Validação falhou para chave ${randomKey}: ${validationResult.errors[0]?.error}`
             );
           }
+        } else {
+          
+            this.logger.warn(
+              `🔍 Miss ${realRandomKey} Acessado!`
+            );
         }
       }
     } catch (error) {
@@ -1010,6 +1016,10 @@ class CacheManagerTester {
       // ) {
       //   this.cacheManager.destroy();
       // }
+      this.createdCaches.forEach((value, key)=>{
+        value.destroy();
+        this.logger.info(`🧹 Cache ${key} destruído`);
+      })
       this.createdCaches.clear();
       this.performanceMonitor.reset();
       this.logger.info('🧹 Recursos do CacheManager liberados');

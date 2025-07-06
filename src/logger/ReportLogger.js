@@ -578,95 +578,105 @@ class ReportLogger {
    * @throws {Error} Lança um erro se houver falha ao recuperar o status da fila
    * @private
    */
-  _getQueueStats() {
-    try {
-      const queueStatus = this.queue.getStatus();
-      const output = [];
+  /**
+ * Obtém e formata estatísticas detalhadas sobre o status da fila de tarefas
+ *
+ * @returns {string} Uma string formatada com informações sobre o status da fila,
+ * incluindo estado atual, estatísticas de execução, detalhes de tarefas e métricas de desempenho
+ * @throws {Error} Lança um erro se houver falha ao recuperar o status da fila
+ * @private
+ */
+_getQueueStats() {
+  try {
+    const queueStatus = this.queue.getStatus();
+    const output = [];
 
+    output.push('');
+    output.push(this._getStyled('⚡ STATUS DA FILA DE TAREFAS', 'bold'));
+
+    const statusIcon = queueStatus.isRunning ? '🟢' : '🔴';
+    const statusText = queueStatus.isRunning ? 'ATIVA' : 'PARADA';
+
+    output.push(this._getStyled(`   ${statusIcon} Status: ${statusText}`, queueStatus.isRunning ? 'green' : 'red'));
+    output.push(`   └─ Tarefas: ${queueStatus.totalTasks} total, ${queueStatus.activeTasks} ativas, ${queueStatus.pausedTasks} pausadas`);
+    output.push(`   └─ Executando agora: ${queueStatus.currentlyExecuting}`);
+    output.push(`   └─ Próxima Execução: ${this._formatNextExecution(queueStatus.nextExecutionIn)}`);
+    output.push(`   └─ Heap: ${queueStatus.heapSize} itens (${queueStatus.heapEfficiency})`);
+    output.push(`   └─ Uptime: ${queueStatus.uptime}`);
+
+    // Estatísticas detalhadas
+    const stats = queueStatus.stats;
+    if (stats) {
       output.push('');
-      output.push(this._getStyled('⚡ STATUS DA FILA DE TAREFAS', 'bold'));
-
-      const statusIcon = queueStatus.isRunning ? '🟢' : '🔴';
-      const statusText = queueStatus.isRunning ? 'ATIVA' : 'PARADA';
-      output.push(
-        this._getStyled(
-          `   ${statusIcon} Status: ${statusText}`,
-          queueStatus.isRunning ? 'green' : 'red'
-        )
-      );
-      output.push(
-        `   └─ Tarefas: ${queueStatus.totalTasks} total, ${queueStatus.activeTasks} ativas`
-      );
-      output.push(`   └─ Executando: ${queueStatus.currentlyExecuting}`);
-      output.push(
-        `   └─ Próxima Execução: ${this._formatNextExecution(
-          queueStatus.nextExecutionIn
-        )}`
-      );
-      output.push(`   └─ Heap Size: ${queueStatus.heapSize}`);
-
-      const stats = queueStatus.stats;
-      if (stats) {
-        output.push('');
-        output.push(
-          this._getStyled('   📈 ESTATÍSTICAS DETALHADAS', 'magenta')
-        );
-        output.push(
-          `      └─ Execuções: ${stats.totalExecutions} (${stats.totalErrors} erros)`
-        );
-        output.push(
-          `      └─ Puladas por Debounce: ${stats.totalSkippedByDebounce}`
-        );
-        output.push(
-          `      └─ Eficiência do Debounce: ${stats.debounceEfficiency}`
-        );
-        output.push(
-          `      └─ Tempo Médio de Execução: ${stats.avgExecutionTime?.toFixed(
-            2
-          )}ms`
-        );
-        output.push(
-          `      └─ Uptime da Fila: ${this._formatUptime(
-            Date.now() - stats.queueStartTime
-          )}`
-        );
-      }
-
-      const tasks = queueStatus.taskDetails;
-      if (tasks && tasks.length > 0) {
-        output.push('');
-        output.push(this._getStyled('   🔧 TAREFAS PRINCIPAIS', 'gray'));
-
-        tasks.slice(0, 5).forEach((task) => {
-          const activeIcon = task.isActive ? '✅' : '⏸️';
-          const nextExec = this._formatDuration(task.nextExecutionIn);
-
-          output.push(`      ${activeIcon} ${task.id}`);
-          output.push(
-            `         └─ Execuções: ${task.executionCount}, Prioridade: ${task.priority}`
-          );
-          output.push(`         └─ Próxima: ${nextExec}`);
-
-          if (task.debounce?.enabled) {
-            output.push(
-              `         └─ Debounce: ${task.debounce.time}ms (${
-                task.debounce.canCall ? 'pronto' : 'aguardando'
-              })`
-            );
-          }
-        });
-
-        if (tasks.length > 5) {
-          output.push(`      ... e mais ${tasks.length - 5} tarefas`);
-        }
-      }
-
-      return output.join('\n');
-    } catch (error) {
-      this.logger.error('Erro ao obter status da fila:', error);
+      output.push(this._getStyled('   📈 ESTATÍSTICAS DETALHADAS', 'magenta'));
+      output.push(`      └─ Execuções: ${stats.totalExecutions} (${stats.totalErrors} erros)`);
+      output.push(`      └─ Puladas por Debounce: ${stats.totalSkippedByDebounce}`);
+      output.push(`      └─ Eficiência do Debounce: ${stats.debounceEfficiency}`);
+      output.push(`      └─ Tempo Médio Execução: ${stats.avgExecutionTime?.toFixed(2)}ms`);
+      output.push(`      └─ Tempo médio entre execuções: ${queueStatus.avgTimeBetweenExecutions.toFixed(2)}ms`);
+      output.push(`      └─ Execuções por Minuto: ${queueStatus.executionsPerMinute}`);
+      output.push(`      └─ Taxa de Erro: ${queueStatus.errorRate}`);
     }
+
+    // Métricas de performance
+    if (queueStatus.performance) {
+      output.push('');
+      output.push(this._getStyled('   🚀 PERFORMANCE', 'cyan'));
+      output.push(`      └─ Concorrência: ${queueStatus.performance.concurrencyUtilization}`);
+      output.push(`      └─ Slots Livres: ${queueStatus.performance.availableConcurrencySlots}`);
+      const timeStats = queueStatus.performance.executionTimeStats;
+      if (timeStats) {
+        output.push(`      └─ Execução: min ${timeStats.min}ms, max ${timeStats.max}ms, mediana ${timeStats.median}ms`);
+      }
+      output.push(`      └─ Throughput: ${queueStatus.performance.throughput} tarefas/s`);
+    }
+
+    // Saúde do sistema
+    if (queueStatus.health) {
+      output.push('');
+      output.push(this._getStyled('   🧠 SAÚDE DO SISTEMA', 'yellow'));
+      output.push(`      └─ Status: ${queueStatus.health.status}`);
+      output.push(`      └─ Heap Leak? ${queueStatus.health.possibleHeapLeak ? '🚨 Sim' : '✅ Não'}`);
+      output.push(`      └─ Tarefas Travadas? ${queueStatus.health.hasStuckTasks ? '🚨 Sim' : '✅ Não'}`);
+      if (queueStatus.health.alerts.length > 0) {
+        output.push(`      └─ Alertas:`);
+        queueStatus.health.alerts.forEach((alert) => output.push(`         └─ ⚠️ ${alert}`));
+      }
+    }
+
+    // Tarefas principais
+    const tasks = queueStatus.taskDetails;
+    if (tasks && tasks.length > 0) {
+      output.push('');
+      output.push(this._getStyled('   🔧 TAREFAS PRINCIPAIS', 'gray'));
+
+      tasks.slice(0, 5).forEach((task) => {
+        const activeIcon = task.isActive ? '✅' : task.isPaused ? '⏸️' : '🕒';
+        output.push(`      ${activeIcon} ${task.id}`);
+        output.push(`         └─ Execuções: ${task.executionCount} (${task.executionFrequency})`);
+        output.push(`         └─ Status: ${task.status}`);
+        output.push(`         └─ Última Execução: ${task.lastExecution}`);
+        output.push(`         └─ Prioridade: ${task.priority}`);
+        output.push(`         └─ Próxima em: ${this._formatDuration(task.nextExecutionIn)}`);
+        if (task.debounce?.enabled) {
+          output.push(
+            `         └─ Debounce: ${task.debounce.time}ms (${task.debounce.canCall ? 'pronto' : 'aguardando'}) — restante: ${task.debounce.timeRemaining}`
+          );
+        }
+      });
+
+      if (tasks.length > 5) {
+        output.push(`      ... e mais ${tasks.length - 5} tarefas`);
+      }
+    }
+
+    return output.join('\n');
+  } catch (error) {
+    this.logger.error('Erro ao obter status da fila:', error);
     return '';
   }
+}
+
 
   /**
    * Gera o rodapé do relatório com informações sobre o próximo relatório agendado
