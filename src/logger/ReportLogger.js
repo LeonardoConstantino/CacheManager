@@ -7,6 +7,7 @@ const Logger = require('./Logger');
 const { createNewTaskQueue } = require('../taskQueue/index.js');
 const { logLevel, logStyles } = require('../utils/log.js');
 const { formatDuration } = require('./../utils/utils.js');
+
 /**
  * ReportLogger - Sistema de logging humanizado para estatísticas de sistema
  *
@@ -449,10 +450,14 @@ class ReportLogger {
         );
         output.push(`         └─ ${stats.sets} sets`);
         output.push(
-          `            └─ Latência média: ${formatDuration(stats.avgSetLatencyMS)}`
+          `            └─ Latência média: ${formatDuration(
+            stats.avgSetLatencyMS
+          )}`
         );
         output.push(
-          `            └─ Máxima: ${stats.maxSetLatencyMS.key} (${formatDuration(stats.maxSetLatencyMS.latencyMS)})`
+          `            └─ Máxima: ${
+            stats.maxSetLatencyMS.key
+          } (${formatDuration(stats.maxSetLatencyMS.latencyMS)})`
         );
         output.push(`            └─ Ultima set ${stats.lastSetKey}`);
 
@@ -506,6 +511,7 @@ class ReportLogger {
    */
   _getMemoryStats() {
     try {
+      const mem = process.memoryUsage();
       const memoryStats = this.cacheManager?.getConsolidateMemoryStats();
       const consolidate = memoryStats?.consolidate;
 
@@ -551,6 +557,33 @@ class ReportLogger {
           consolidate?.averageEntrySize ?? 0,
           prev.averageEntrySize ?? 0
         )}`,
+        '',
+        '',
+        this._getStyled('💾 USO DE MEMÓRIA DO SISTEMA', 'bold'),
+        `   └─ Tamanho do Conjunto Residente (RSS): ${this._formatBytes(
+          mem.rss
+        )} MB ${this._getTendency(
+          this._formatBytes(mem.rss) ?? 0,
+          this._formatBytes(prev.rss) ?? 0
+        )}`,
+        `   └─ Memória Usada V8: ${this._formatBytes(
+          mem.heapUsed
+        )} MB ${this._getTendency(
+          this._formatBytes(mem.heapUsed) ?? 0,
+          this._formatBytes(prev.heapUsed) ?? 0
+        )}`,
+        `   └─ Memória Alocada V8: ${this._formatBytes(
+          mem.heapTotal
+        )} MB ${this._getTendency(
+          this._formatBytes(mem.heapTotal) ?? 0,
+          this._formatBytes(prev.heapTotal) ?? 0
+        )}`,
+        `   └─ Memória externa usada: ${this._formatBytes(
+          mem.external
+        )} MB ${this._getTendency(
+          this._formatBytes(mem.external) ?? 0,
+          this._formatBytes(prev.external) ?? 0
+        )}`,
       ];
 
       // Atualiza os valores anteriores
@@ -561,6 +594,10 @@ class ReportLogger {
         objectEntries: consolidate?.objectEntries,
         primitiveEntries: consolidate?.primitiveEntries,
         averageEntrySize: consolidate?.averageEntrySize,
+        rss: mem.rss,
+        heapUsed: mem.heapUsed,
+        heapTotal: mem.heapTotal,
+        external: mem.external,
       });
 
       return lines.join('\n');
@@ -578,105 +615,153 @@ class ReportLogger {
    * @throws {Error} Lança um erro se houver falha ao recuperar o status da fila
    * @private
    */
-  /**
- * Obtém e formata estatísticas detalhadas sobre o status da fila de tarefas
- *
- * @returns {string} Uma string formatada com informações sobre o status da fila,
- * incluindo estado atual, estatísticas de execução, detalhes de tarefas e métricas de desempenho
- * @throws {Error} Lança um erro se houver falha ao recuperar o status da fila
- * @private
- */
-_getQueueStats() {
-  try {
-    const queueStatus = this.queue.getStatus();
-    const output = [];
+  _getQueueStats() {
+    try {
+      const queueStatus = this.queue.getStatus();
+      const output = [];
 
-    output.push('');
-    output.push(this._getStyled('⚡ STATUS DA FILA DE TAREFAS', 'bold'));
-
-    const statusIcon = queueStatus.isRunning ? '🟢' : '🔴';
-    const statusText = queueStatus.isRunning ? 'ATIVA' : 'PARADA';
-
-    output.push(this._getStyled(`   ${statusIcon} Status: ${statusText}`, queueStatus.isRunning ? 'green' : 'red'));
-    output.push(`   └─ Tarefas: ${queueStatus.totalTasks} total, ${queueStatus.activeTasks} ativas, ${queueStatus.pausedTasks} pausadas`);
-    output.push(`   └─ Executando agora: ${queueStatus.currentlyExecuting}`);
-    output.push(`   └─ Próxima Execução: ${this._formatNextExecution(queueStatus.nextExecutionIn)}`);
-    output.push(`   └─ Heap: ${queueStatus.heapSize} itens (${queueStatus.heapEfficiency})`);
-    output.push(`   └─ Uptime: ${queueStatus.uptime}`);
-
-    // Estatísticas detalhadas
-    const stats = queueStatus.stats;
-    if (stats) {
       output.push('');
-      output.push(this._getStyled('   📈 ESTATÍSTICAS DETALHADAS', 'magenta'));
-      output.push(`      └─ Execuções: ${stats.totalExecutions} (${stats.totalErrors} erros)`);
-      output.push(`      └─ Puladas por Debounce: ${stats.totalSkippedByDebounce}`);
-      output.push(`      └─ Eficiência do Debounce: ${stats.debounceEfficiency}`);
-      output.push(`      └─ Tempo Médio Execução: ${stats.avgExecutionTime?.toFixed(2)}ms`);
-      output.push(`      └─ Tempo médio entre execuções: ${queueStatus.avgTimeBetweenExecutions.toFixed(2)}ms`);
-      output.push(`      └─ Execuções por Minuto: ${queueStatus.executionsPerMinute}`);
-      output.push(`      └─ Taxa de Erro: ${queueStatus.errorRate}`);
-    }
+      output.push(this._getStyled('⚡ STATUS DA FILA DE TAREFAS', 'bold'));
 
-    // Métricas de performance
-    if (queueStatus.performance) {
-      output.push('');
-      output.push(this._getStyled('   🚀 PERFORMANCE', 'cyan'));
-      output.push(`      └─ Concorrência: ${queueStatus.performance.concurrencyUtilization}`);
-      output.push(`      └─ Slots Livres: ${queueStatus.performance.availableConcurrencySlots}`);
-      const timeStats = queueStatus.performance.executionTimeStats;
-      if (timeStats) {
-        output.push(`      └─ Execução: min ${timeStats.min}ms, max ${timeStats.max}ms, mediana ${timeStats.median}ms`);
+      const statusIcon = queueStatus.isRunning ? '🟢' : '🔴';
+      const statusText = queueStatus.isRunning ? 'ATIVA' : 'PARADA';
+
+      output.push(
+        this._getStyled(
+          `   ${statusIcon} Status: ${statusText}`,
+          queueStatus.isRunning ? 'green' : 'red'
+        )
+      );
+      output.push(
+        `   └─ Tarefas: ${queueStatus.totalTasks} total, ${queueStatus.activeTasks} ativas, ${queueStatus.pausedTasks} pausadas`
+      );
+      output.push(`   └─ Executando agora: ${queueStatus.currentlyExecuting}`);
+      output.push(
+        `   └─ Próxima Execução: ${this._formatNextExecution(
+          queueStatus.nextExecutionIn
+        )}`
+      );
+      output.push(
+        `   └─ Heap: ${queueStatus.heapSize} itens (${queueStatus.heapEfficiency})`
+      );
+      output.push(`   └─ Uptime: ${queueStatus.uptime}`);
+
+      // Estatísticas detalhadas
+      const stats = queueStatus.stats;
+      if (stats) {
+        output.push('');
+        output.push(
+          this._getStyled('   📈 ESTATÍSTICAS DETALHADAS', 'magenta')
+        );
+        output.push(
+          `      └─ Execuções: ${stats.totalExecutions} (${stats.totalErrors} erros)`
+        );
+        output.push(
+          `      └─ Puladas por Debounce: ${stats.totalSkippedByDebounce}`
+        );
+        output.push(
+          `      └─ Eficiência do Debounce: ${stats.debounceEfficiency}`
+        );
+        output.push(
+          `      └─ Tempo Médio Execução: ${stats.avgExecutionTime?.toFixed(
+            2
+          )}ms`
+        );
+        output.push(
+          `      └─ Tempo médio entre execuções: ${queueStatus.avgTimeBetweenExecutions.toFixed(
+            2
+          )}ms`
+        );
+        output.push(
+          `      └─ Execuções por Minuto: ${queueStatus.executionsPerMinute}`
+        );
+        output.push(`      └─ Taxa de Erro: ${queueStatus.errorRate}`);
       }
-      output.push(`      └─ Throughput: ${queueStatus.performance.throughput} tarefas/s`);
-    }
 
-    // Saúde do sistema
-    if (queueStatus.health) {
-      output.push('');
-      output.push(this._getStyled('   🧠 SAÚDE DO SISTEMA', 'yellow'));
-      output.push(`      └─ Status: ${queueStatus.health.status}`);
-      output.push(`      └─ Heap Leak? ${queueStatus.health.possibleHeapLeak ? '🚨 Sim' : '✅ Não'}`);
-      output.push(`      └─ Tarefas Travadas? ${queueStatus.health.hasStuckTasks ? '🚨 Sim' : '✅ Não'}`);
-      if (queueStatus.health.alerts.length > 0) {
-        output.push(`      └─ Alertas:`);
-        queueStatus.health.alerts.forEach((alert) => output.push(`         └─ ⚠️ ${alert}`));
-      }
-    }
-
-    // Tarefas principais
-    const tasks = queueStatus.taskDetails;
-    if (tasks && tasks.length > 0) {
-      output.push('');
-      output.push(this._getStyled('   🔧 TAREFAS PRINCIPAIS', 'gray'));
-
-      tasks.slice(0, 5).forEach((task) => {
-        const activeIcon = task.isActive ? '✅' : task.isPaused ? '⏸️' : '🕒';
-        output.push(`      ${activeIcon} ${task.id}`);
-        output.push(`         └─ Execuções: ${task.executionCount} (${task.executionFrequency})`);
-        output.push(`         └─ Status: ${task.status}`);
-        output.push(`         └─ Última Execução: ${task.lastExecution}`);
-        output.push(`         └─ Prioridade: ${task.priority}`);
-        output.push(`         └─ Próxima em: ${this._formatDuration(task.nextExecutionIn)}`);
-        if (task.debounce?.enabled) {
+      // Métricas de performance
+      if (queueStatus.performance) {
+        output.push('');
+        output.push(this._getStyled('   🚀 PERFORMANCE', 'cyan'));
+        output.push(
+          `      └─ Concorrência: ${queueStatus.performance.concurrencyUtilization}`
+        );
+        output.push(
+          `      └─ Slots Livres: ${queueStatus.performance.availableConcurrencySlots}`
+        );
+        const timeStats = queueStatus.performance.executionTimeStats;
+        if (timeStats) {
           output.push(
-            `         └─ Debounce: ${task.debounce.time}ms (${task.debounce.canCall ? 'pronto' : 'aguardando'}) — restante: ${task.debounce.timeRemaining}`
+            `      └─ Execução: min ${timeStats.min}ms, max ${timeStats.max}ms, mediana ${timeStats.median}ms`
           );
         }
-      });
-
-      if (tasks.length > 5) {
-        output.push(`      ... e mais ${tasks.length - 5} tarefas`);
+        output.push(
+          `      └─ Throughput: ${queueStatus.performance.throughput} tarefas/s`
+        );
       }
+
+      // Saúde do sistema
+      if (queueStatus.health) {
+        output.push('');
+        output.push(this._getStyled('   🧠 SAÚDE DO SISTEMA', 'yellow'));
+        output.push(`      └─ Status: ${queueStatus.health.status}`);
+        output.push(
+          `      └─ Heap Leak? ${
+            queueStatus.health.possibleHeapLeak ? '🚨 Sim' : '✅ Não'
+          }`
+        );
+        output.push(
+          `      └─ Tarefas Travadas? ${
+            queueStatus.health.hasStuckTasks ? '🚨 Sim' : '✅ Não'
+          }`
+        );
+        if (queueStatus.health.alerts.length > 0) {
+          output.push(`      └─ Alertas:`);
+          queueStatus.health.alerts.forEach((alert) =>
+            output.push(`         └─ ⚠️ ${alert}`)
+          );
+        }
+      }
+
+      // Tarefas principais
+      const tasks = queueStatus.taskDetails;
+      if (tasks && tasks.length > 0) {
+        output.push('');
+        output.push(this._getStyled('   🔧 TAREFAS PRINCIPAIS', 'gray'));
+
+        tasks.slice(0, 5).forEach((task) => {
+          const activeIcon = task.isActive ? '✅' : task.isPaused ? '⏸️' : '🕒';
+          output.push(`      ${activeIcon} ${task.id}`);
+          output.push(
+            `         └─ Execuções: ${task.executionCount} (${task.executionFrequency})`
+          );
+          output.push(`         └─ Status: ${task.status}`);
+          output.push(`         └─ Última Execução: ${task.lastExecution}`);
+          output.push(`         └─ Prioridade: ${task.priority}`);
+          output.push(
+            `         └─ Próxima em: ${this._formatDuration(
+              task.nextExecutionIn
+            )}`
+          );
+          if (task.debounce?.enabled) {
+            output.push(
+              `         └─ Debounce: ${task.debounce.time}ms (${
+                task.debounce.canCall ? 'pronto' : 'aguardando'
+              }) — restante: ${task.debounce.timeRemaining}`
+            );
+          }
+        });
+
+        if (tasks.length > 5) {
+          output.push(`      ... e mais ${tasks.length - 5} tarefas`);
+        }
+      }
+
+      return output.join('\n');
+    } catch (error) {
+      this.logger.error('Erro ao obter status da fila:', error);
+      return '';
     }
-
-    return output.join('\n');
-  } catch (error) {
-    this.logger.error('Erro ao obter status da fila:', error);
-    return '';
   }
-}
-
 
   /**
    * Gera o rodapé do relatório com informações sobre o próximo relatório agendado
@@ -847,14 +932,54 @@ _getQueueStats() {
   }
 
   /**
-   * Retorna a tendência entre dois valores com emoji, descrição e diferença numérica.
+   * Converte bytes para uma representação legível com unidades (Bytes, KB, MB, GB)
    *
-   * @param {number} currentValue - Valor atual
-   * @param {number} previousValue - Valor anterior
-   * @returns {string} Emoji + descrição + diferença (ex: "📈 Alta (+10)")
+   * @param {number} bytes - Quantidade de bytes a ser formatada
+   * @param {number} [decimals=2] - Número de casas decimais para arredondamento
+   * @returns {string} Bytes formatados com unidade apropriada
+   * @private
+   */
+  _formatBytes = (bytes, decimals = 2) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+  };
+
+  /**
+   * Extrai o valor numérico de uma string (ex: "10 KB" → 10)
+   * @param {string|number} input - Valor de entrada
+   * @returns {number} Valor numérico extraído, ou NaN se não for possível
+   */
+  _parseNumeric(input) {
+    if (typeof input === 'number') return input;
+    if (typeof input === 'string') {
+      const match = input.match(/-?\d+(\.\d+)?/);
+      if (match) return parseFloat(match[0]);
+    }
+    return NaN;
+  }
+
+  /**
+   * Calcula a tendência entre dois valores e retorna uma string formatada
+   * com emoji e descrição da variação.
+   *
+   * @param {number|string} currentValue - Valor atual (ex: "12.5 KB")
+   * @param {number|string} previousValue - Valor anterior (ex: "10 KB")
+   * @returns {string} String formatada com emoji e descrição
+   * @private
    */
   _getTendency(currentValue, previousValue) {
-    const diff = currentValue - previousValue;
+    const current = this._parseNumeric(currentValue);
+    const previous = this._parseNumeric(previousValue);
+
+    if (isNaN(current) || isNaN(previous)) {
+      return '';
+    }
+
+    const diff = current - previous;
 
     if (diff > 0) return `📈 Alta (+${diff.toFixed(2)})`;
     if (diff < 0) return `📉 Queda (${diff.toFixed(2)})`;
